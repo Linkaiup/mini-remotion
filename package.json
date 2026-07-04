@@ -3,22 +3,30 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "A minimal from-scratch reimplementation of Remotion's four-layer architecture: draft -> data -> render -> drive.",
+  "description": "React 画面表达 + Node 渲染引擎 + Python/LangGraph Agent 编排",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "serve": "vite preview --port 4173",
-    "render": "tsx render/render.ts"
+    "make-audio": "tsx scripts/make-sample-audio.ts",
+    "render": "tsx render/render.ts",
+    "engine:write": "tsx engine/write-generated.ts",
+    "engine:validate": "tsx engine/validate.ts",
+    "engine:render": "tsx engine/render-job.ts",
+    "engine:tts": "tsx engine/tts-job.ts",
+    "agent": "PYTHONPATH=agent python3 -m video_agent.cli"
   },
   "dependencies": {
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "puppeteer": "^25.3.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vite": "^6.0.7"

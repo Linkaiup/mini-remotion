@@ -1,3 +1,4 @@
+import { staticFile } from "../core";
 import type { Draft } from "./types";
 
 /**
@@ -11,6 +12,10 @@ export const sampleDraft: Draft = {
   fps: 30,
   durationInFrames: 150,
   background: "linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%)",
+  audio: {
+    src: staticFile("audio.mp3"),
+    volume: 0.6,
+  },
   items: [
     {
       id: "bg-card",
@@ -24,6 +29,18 @@ export const sampleDraft: Draft = {
       color: "rgba(255,255,255,0.06)",
       radius: 24,
       animation: "fadeIn",
+    },
+    {
+      id: "logo",
+      type: "image",
+      from: 5,
+      durationInFrames: 145,
+      x: 792,
+      y: 250,
+      width: 200,
+      height: 200,
+      src: staticFile("logo.svg"),
+      animation: "springPop",
     },
     {
       id: "title",

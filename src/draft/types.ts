@@ -31,7 +31,20 @@ export type RectItem = DraftItemBase & {
   radius?: number;
 };
 
-export type DraftItem = TextItem | RectItem;
+export type ImageItem = DraftItemBase & {
+  type: "image";
+  src: string; // 建议用 staticFile("xxx") 生成
+  width: number;
+  height: number;
+};
+
+export type DraftItem = TextItem | RectItem | ImageItem;
+
+export type DraftAudio = {
+  src: string; // 建议用 staticFile("xxx") 生成
+  volume?: number; // 0..1
+  startFrom?: number; // 从音频文件第几帧开始取
+};
 
 export type Draft = {
   id: string;
@@ -41,4 +54,5 @@ export type Draft = {
   durationInFrames: number;
   background: string;
   items: DraftItem[];
+  audio?: DraftAudio;
 };

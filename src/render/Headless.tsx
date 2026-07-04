@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from "react";
-import { FrameProvider, getPendingCount } from "../core";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  AudioManagerProvider,
+  FrameProvider,
+  PlaybackProvider,
+  VideoConfigProvider,
+  getPendingCount,
+  useAudioManager,
+} from "../core";
+import type { AudioEntry } from "../core";
 import { getComposition } from "../compositions";
 
 /**
  * headless 桥接:导出时 Puppeteer 打开 ?headless=1&comp=<id>,
  * 本组件在 window 上挂载与真实 Remotion 同款的控制函数,
- * 供 Node 端渲染器逐帧驱动 + 截图。
+ * 供 Node 端渲染器逐帧驱动 + 截图,并暴露音频时间线供离线混流。
  * 对照真实 Remotion: window.remotion_setFrame(见 packages/core/src/TimelineContext.tsx)
  */
 declare global {
@@ -18,12 +26,29 @@ declare global {
       fps: number;
       durationInFrames: number;
     };
+    __miniRemotionGetAudio?: () => AudioEntry[];
   }
 }
 
-export const Headless: React.FC<{ compId: string }> = ({ compId }) => {
+// 把 AudioManager 的读取函数挂到 window,供渲染器每帧抓取
+const AudioBridge: React.FC = () => {
+  const manager = useAudioManager();
+  useEffect(() => {
+    window.__miniRemotionGetAudio = () => manager?.getEntries() ?? [];
+    return () => {
+      delete window.__miniRemotionGetAudio;
+    };
+  }, [manager]);
+  return null;
+};
+
+export const Headless: React.FC<{
+  compId: string;
+  inputProps: Record<string, unknown>;
+}> = ({ compId, inputProps }) => {
   const composition = getComposition(compId);
   const [frame, setFrame] = useState(0);
+  const readyPollRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!composition) return;
@@ -34,7 +59,15 @@ export const Headless: React.FC<{ compId: string }> = ({ compId }) => {
       durationInFrames: composition.durationInFrames,
     };
     window.__miniRemotionSetFrame = (f: number) => setFrame(f);
-    window.__miniRemotionReady = getPendingCount() === 0;
+
+    // 持续同步 ready 标志(delayRender 计数可能异步变化)
+    readyPollRef.current = window.setInterval(() => {
+      window.__miniRemotionReady = getPendingCount() === 0;
+    }, 16);
+    return () => {
+      if (readyPollRef.current !== null)
+        window.clearInterval(readyPollRef.current);
+    };
   }, [composition]);
 
   if (!composition) {
@@ -42,23 +75,40 @@ export const Headless: React.FC<{ compId: string }> = ({ compId }) => {
   }
 
   const Component = composition.component;
+  const mergedProps = { ...composition.defaultProps, ...inputProps };
 
-  // 原始分辨率、无缩放、定位到左上角,方便 Puppeteer 按视口精确截图
   return (
-    <div
-      id="mini-remotion-canvas"
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
+    <VideoConfigProvider
+      config={{
+        id: composition.id,
         width: composition.width,
         height: composition.height,
-        overflow: "hidden",
+        fps: composition.fps,
+        durationInFrames: composition.durationInFrames,
+        mode: "render",
       }}
     >
-      <FrameProvider frame={frame}>
-        <Component />
-      </FrameProvider>
-    </div>
+      <PlaybackProvider playing={false}>
+        <AudioManagerProvider>
+          <AudioBridge />
+          {/* 原始分辨率、无缩放、定位左上角,方便 Puppeteer 精确截图 */}
+          <div
+            id="mini-remotion-canvas"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: composition.width,
+              height: composition.height,
+              overflow: "hidden",
+            }}
+          >
+            <FrameProvider frame={frame}>
+              <Component {...mergedProps} />
+            </FrameProvider>
+          </div>
+        </AudioManagerProvider>
+      </PlaybackProvider>
+    </VideoConfigProvider>
   );
 };

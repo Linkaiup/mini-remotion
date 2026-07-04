@@ -1,5 +1,10 @@
 import React from "react";
-import { FrameProvider } from "../core";
+import {
+  AudioManagerProvider,
+  FrameProvider,
+  PlaybackProvider,
+  VideoConfigProvider,
+} from "../core";
 import type { Composition } from "../core";
 
 /**
@@ -11,7 +16,9 @@ export const Preview: React.FC<{
   composition: Composition;
   frame: number;
   scale: number;
-}> = ({ composition, frame, scale }) => {
+  playing: boolean;
+  inputProps: Record<string, unknown>;
+}> = ({ composition, frame, scale, playing, inputProps }) => {
   const Component = composition.component;
 
   return (
@@ -33,9 +40,24 @@ export const Preview: React.FC<{
           position: "relative",
         }}
       >
-        <FrameProvider frame={frame}>
-          <Component />
-        </FrameProvider>
+        <VideoConfigProvider
+          config={{
+            id: composition.id,
+            width: composition.width,
+            height: composition.height,
+            fps: composition.fps,
+            durationInFrames: composition.durationInFrames,
+            mode: "preview",
+          }}
+        >
+          <PlaybackProvider playing={playing}>
+            <AudioManagerProvider>
+              <FrameProvider frame={frame}>
+                <Component {...inputProps} />
+              </FrameProvider>
+            </AudioManagerProvider>
+          </PlaybackProvider>
+        </VideoConfigProvider>
       </div>
     </div>
   );

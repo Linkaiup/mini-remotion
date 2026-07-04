@@ -29,6 +29,13 @@ export const useCurrentFrame = (): number => {
 };
 
 /**
+ * 读取当前所在 <Sequence> 的绝对起始帧(顶层为 0)。
+ * <Audio>/<Video> 用它来确定自己在整条时间线上的起点。
+ */
+export const useSequenceOffset = (): number =>
+  useContext(SequenceContext).offset;
+
+/**
  * <Sequence>:在时间轴上平移子内容。from 之前和 durationInFrames 之后不渲染。
  * 对照真实 Remotion: packages/core/src/Sequence.tsx
  */

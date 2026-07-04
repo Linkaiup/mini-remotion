@@ -1,6 +1,8 @@
 import React from "react";
 import {
+  Audio,
   Easing,
+  Img,
   Sequence,
   interpolate,
   spring,
@@ -77,6 +79,17 @@ const DraftItemView: React.FC<{ item: DraftItem; fps: number }> = ({
     );
   }
 
+  if (item.type === "image") {
+    return (
+      <Img
+        src={item.src}
+        width={item.width}
+        height={item.height}
+        style={base}
+      />
+    );
+  }
+
   return (
     <div
       style={{
@@ -104,6 +117,13 @@ export const makeDraftComponent = (draft: Draft): React.FC => {
           overflow: "hidden",
         }}
       >
+        {draft.audio ? (
+          <Audio
+            src={draft.audio.src}
+            volume={draft.audio.volume ?? 1}
+            startFrom={draft.audio.startFrom ?? 0}
+          />
+        ) : null}
         {draft.items.map((item) => (
           <Sequence
             key={item.id}

@@ -1,23 +1,58 @@
 import React from "react";
-import { interpolate, random, spring, useCurrentFrame } from "../core";
+import {
+  Audio,
+  interpolate,
+  random,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  z,
+  zColor,
+} from "../core";
 
 /**
- * 一个"纯代码"视频(不经过草稿层),演示数据层的完全能力。
- * 画面完全由 frame 计算得出 —— 同一帧永远相同,因此可 seek / 并发渲染。
+ * 一个"纯代码"视频(不经过草稿层),演示数据层的完全能力 + props 驱动。
+ * 画面完全由 frame + props 计算得出 —— 同一帧同一 props 永远相同。
  */
 const FPS = 30;
 
-export const CodeDemo: React.FC = () => {
+// props 的 zod schema:既能运行时校验,又能在 Studio 自动生成表单
+export const codeDemoSchema = z.object({
+  titleText: z.string(),
+  titleColor: zColor(),
+  ballColor: zColor(),
+  backgroundColor: zColor(),
+  starCount: z.number().min(0).max(120),
+  showBall: z.boolean(),
+});
+
+export type CodeDemoProps = z.infer<typeof codeDemoSchema>;
+
+export const codeDemoDefaultProps: CodeDemoProps = {
+  titleText: "Pure Code Video",
+  titleColor: "#f8fafc",
+  ballColor: "#0284c7",
+  backgroundColor: "#0f172a",
+  starCount: 40,
+  showBall: true,
+};
+
+export const CodeDemo: React.FC<CodeDemoProps> = ({
+  titleText,
+  titleColor,
+  ballColor,
+  backgroundColor,
+  starCount,
+  showBall,
+}) => {
   const frame = useCurrentFrame();
 
-  // 弹跳的小球
   const bounce = Math.abs(Math.sin((frame / FPS) * Math.PI * 1.2));
   const ballY = interpolate(bounce, [0, 1], [420, 120]);
   const ballX = interpolate(frame, [0, 150], [140, 1040], {
     extrapolateRight: "clamp",
   });
 
-  // 标题弹入
   const titleScale = spring({ frame, fps: FPS, config: { damping: 8 } });
 
   return (
@@ -25,13 +60,15 @@ export const CodeDemo: React.FC = () => {
       style={{
         position: "absolute",
         inset: 0,
-        background: "#0f172a",
+        background: backgroundColor,
         overflow: "hidden",
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
+      <Audio src={staticFile("audio.mp3")} volume={0.4} />
+
       {/* 确定性随机星点背景 */}
-      {Array.from({ length: 40 }).map((_, i) => {
+      {Array.from({ length: Math.round(starCount) }).map((_, i) => {
         const x = random(`x-${i}`) * 1280;
         const y = random(`y-${i}`) * 720;
         const twinkle = interpolate(
@@ -63,26 +100,28 @@ export const CodeDemo: React.FC = () => {
           top: 60,
           fontSize: 64,
           fontWeight: 800,
-          color: "#f8fafc",
+          color: titleColor,
           transform: `scale(${titleScale})`,
           transformOrigin: "left center",
         }}
       >
-        Pure Code Video
+        {titleText}
       </div>
 
-      <div
-        style={{
-          position: "absolute",
-          left: ballX,
-          top: ballY,
-          width: 100,
-          height: 100,
-          borderRadius: 100,
-          background: "radial-gradient(circle at 35% 35%, #7dd3fc, #0284c7)",
-          boxShadow: "0 20px 40px rgba(2,132,199,0.4)",
-        }}
-      />
+      {showBall ? (
+        <div
+          style={{
+            position: "absolute",
+            left: ballX,
+            top: ballY,
+            width: 100,
+            height: 100,
+            borderRadius: 100,
+            background: `radial-gradient(circle at 35% 35%, #7dd3fc, ${ballColor})`,
+            boxShadow: "0 20px 40px rgba(2,132,199,0.4)",
+          }}
+        />
+      ) : null}
     </div>
   );
 };
