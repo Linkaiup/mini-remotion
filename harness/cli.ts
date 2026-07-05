@@ -99,6 +99,6 @@ const main = async () => {
 };
 
 main().catch((err) => {
-  console.error("[harness:FAILED]", err);
+  console.error("\n[harness:FAILED]", err instanceof Error ? err.message : err);
   process.exit(1);
 });

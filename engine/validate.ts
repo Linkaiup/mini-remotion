@@ -10,13 +10,15 @@ export const runTsc = async (): Promise<string | null> =>
     const child = spawn("./node_modules/.bin/tsc", ["--noEmit"], {
       cwd: resolve("."),
     });
-    let stderr = "";
-    child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString();
-    });
+    let output = "";
+    const append = (d: Buffer) => {
+      output += d.toString();
+    };
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
     child.on("close", (code) => {
       if (code === 0) res(null);
-      else res(stderr.trim() || `tsc exited with code ${code}`);
+      else res(output.trim() || `tsc exited with code ${code}`);
     });
     child.on("error", () => res("无法运行 tsc"));
   });

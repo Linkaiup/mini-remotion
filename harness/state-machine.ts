@@ -24,15 +24,14 @@ import type {
   HarnessContext,
   HarnessOptions,
   HarnessResult,
-  HarnessStatus,
 } from "./types.js";
 import {
   appendRepairMessage,
   validatePlan,
 } from "./validate-plan.js";
+import { harnessFail, harnessLog } from "./log.js";
 
-const log = (status: HarnessStatus, msg: string) =>
-  console.log(`[harness:${status}] ${msg}`);
+const log = harnessLog;
 
 const initContext = (opts: HarnessOptions): HarnessContext => {
   const provider = selectProvider();
@@ -84,30 +83,35 @@ const stepInit = async (ctx: HarnessContext): Promise<void> => {
 
 const stepPlan = async (ctx: HarnessContext): Promise<void> => {
   ctx.attempts += 1;
-  log("PLAN", `LLM 生成 TSX (${ctx.attempts}/${ctx.maxRetries}, ${ctx.providerName})`);
+  log("PLAN", `LLM 生成 TSX (${ctx.attempts}/${ctx.maxRetries}, ${ctx.providerName})…`);
 
   const provider = selectProvider();
   const raw = await provider.complete(ctx.messages);
   ctx.code = extractCode(raw);
   ctx.messages.push({ role: "assistant", content: raw });
+  log("PLAN", `   已生成 ${ctx.code.split("\n").length} 行代码`);
 
   ctx.status = "VALIDATE_PLAN";
 };
 
 const stepValidatePlan = async (ctx: HarnessContext): Promise<void> => {
-  log("VALIDATE_PLAN", "静态检查 + tsc + 冒烟");
-
   const result = await validatePlan(ctx);
   if (!result.ok) {
     ctx.lastErrors = result.errors;
-    log("VALIDATE_PLAN", `失败:\n${result.errors.slice(0, 300)}`);
     appendRepairMessage(ctx, result.errors);
-    ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
-    ctx.error = ctx.lastErrors;
+    const retryLeft = ctx.maxRetries - ctx.attempts;
+    if (retryLeft > 0) {
+      log("VALIDATE_PLAN", `将重试, 剩余 ${retryLeft} 次`);
+      ctx.status = "OPTIMIZE";
+    } else {
+      harnessFail("VALIDATE_PLAN", `已达最大重试 (${ctx.maxRetries}), 终止`, result.errors);
+      ctx.status = "FAILED";
+    }
+    ctx.error = `[${result.stage}] ${ctx.lastErrors}`;
     return;
   }
 
-  log("VALIDATE_PLAN", "通过 ✓");
+  log("VALIDATE_PLAN", "全部通过 ✓");
   if (ctx.skipRender) {
     ctx.status = "DONE";
   } else {
@@ -128,17 +132,19 @@ const stepRenderFrames = async (ctx: HarnessContext): Promise<void> => {
     ctx.framesDir = captured.framesDir;
     ctx.audios = captured.audios;
     ctx.renderElapsedSeconds = captured.elapsedSeconds;
-    log("RENDER_FRAMES", `完成 ${captured.elapsedSeconds.toFixed(1)}s`);
+    log("RENDER_FRAMES", `完成 ${captured.elapsedSeconds.toFixed(1)}s, ${captured.meta.durationInFrames} 帧`);
     ctx.status = "ENCODE_VIDEO";
   } catch (e) {
     ctx.lastErrors = String(e);
     ctx.error = ctx.lastErrors;
+    harnessFail("RENDER_FRAMES", "截图失败", ctx.lastErrors);
     ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
   }
 };
 
 const stepEncodeVideo = async (ctx: HarnessContext): Promise<void> => {
   if (!ctx.meta) {
+    harnessFail("ENCODE_VIDEO", "缺少 meta, 无法编码");
     ctx.status = "FAILED";
     ctx.error = "缺少 meta,无法编码";
     return;
@@ -157,6 +163,7 @@ const stepEncodeVideo = async (ctx: HarnessContext): Promise<void> => {
   } catch (e) {
     ctx.lastErrors = String(e);
     ctx.error = ctx.lastErrors;
+    harnessFail("ENCODE_VIDEO", "编码失败", ctx.lastErrors);
     ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
   }
 };
@@ -178,11 +185,14 @@ const stepEvaluate = async (ctx: HarnessContext): Promise<void> => {
     !ctx.quality.ok ||
     ctx.quality.score < ctx.minQualityScore
   ) {
+    const detail = ctx.quality.issues.join("\n");
     if (ctx.attempts < ctx.maxRetries) {
-      ctx.lastErrors = ctx.quality.issues.join("\n");
+      ctx.lastErrors = detail;
+      harnessFail("EVALUATE", `质量未达标 (${ctx.quality.score.toFixed(2)} < ${ctx.minQualityScore})`, detail);
       ctx.status = "OPTIMIZE";
       return;
     }
+    harnessFail("EVALUATE", "质量未达标且已达最大重试", detail);
   }
 
   ctx.status = "DONE";
@@ -195,7 +205,7 @@ const stepOptimize = async (ctx: HarnessContext): Promise<void> => {
 
   log(
     "OPTIMIZE",
-    `第 ${ctx.optimizeRound} 轮优化 → 降并发至 ${ctx.concurrency}, 回 PLAN 重试`,
+    `第 ${ctx.optimizeRound} 轮 → concurrency=${ctx.concurrency}, 回 PLAN (${reason})`,
   );
 
   if (ctx.lastErrors && ctx.code) {
