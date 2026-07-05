@@ -17,5 +17,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "render", "engine"]
+  "include": ["src", "render", "engine", "harness", "config"]
 }

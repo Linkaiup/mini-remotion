@@ -4,9 +4,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Python/LangGraph (agent/)     Agent 编排、质量评测、失败恢复、资源调度  │
+│  TypeScript Harness (harness/)  状态机编排、质量评测、失败恢复、资源调度  │
 └───────────────────────────────┬─────────────────────────────┘
-                                │ subprocess 调用
+                                │ 直接 import engine/render
 ┌───────────────────────────────▼─────────────────────────────┐
 │  Node.js (engine/ + render/)   逐帧渲染、冒烟校验、FFmpeg 合成、TTS   │
 └───────────────────────────────┬─────────────────────────────┘
@@ -110,31 +110,39 @@ npm run render -- --comp CodeDemo --out out/video.mp4 \
 
 ## Enhanced Video Agent(文本 → 视频)
 
-**Python/LangGraph** 负责编排;**Node** 负责渲染;**React** 负责画面。
+**TypeScript Harness 状态机**负责编排;**Node** 负责渲染;**React** 负责画面。
+
+Harness 状态:`INIT → PLAN → VALIDATE_PLAN → RENDER_FRAMES → ENCODE_VIDEO → EVALUATE → DONE`  
+失败恢复:`VALIDATE_PLAN / EVALUATE → OPTIMIZE → PLAN`  
+终态:`DONE | FAILED`
 
 ```bash
-pip install -r agent/requirements.txt
+cp .env.example .env   # 编辑 .env, 填入 DEEPSEEK_API_KEY
 
-# stub(无 API key)
-MINI_REMOTION_PROVIDER=stub npm run agent -- "星空背景,标题弹入"
+# stub(无需 key, 或在 .env 里设 MINI_REMOTION_PROVIDER=stub)
+npm run agent -- "星空背景,标题弹入"
 
-# OpenAI
-export OPENAI_API_KEY=sk-...
+# DeepSeek V4 Pro(.env 中 MINI_REMOTION_PROVIDER=deepseek + DEEPSEEK_API_KEY)
 npm run agent -- "蓝色渐变开场"
 
 # 旁白(macOS say)
 npm run agent -- "产品介绍" --narration "欢迎来到我们的产品"
+
+# 只生成+校验,不渲染
+MINI_REMOTION_PROVIDER=stub npm run agent -- "测试" --no-render
 ```
 
 | 目录 | 技术栈 | 职责 |
 |------|--------|------|
 | `src/` | React | 画面表达:`useCurrentFrame`、组件、动画 |
 | `engine/` + `render/` | Node.js | 写 generated、校验(tsc+冒烟)、并发截图、FFmpeg |
-| `agent/video_agent/` | Python/LangGraph | LLM 生成 TSX、自愈循环、调度、质量评测 |
+| `harness/` | TypeScript 状态机 | LLM 生成 TSX、自愈循环、调度、质量评测 |
 
-LangGraph 流程:`prepare → generate → validate → [重试|render] → evaluate`
+环境变量:`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`(默认 `deepseek-v4-pro`)、`DEEPSEEK_BASE_URL`、`MINI_REMOTION_PROVIDER=stub|deepseek|openai`、`MINI_REMOTION_TTS=noop`  
+也支持 OpenAI 兼容配置:`OPENAI_API_KEY`、`OPENAI_MODEL`、`OPENAI_BASE_URL`。  
+推荐放在项目根目录 **`.env`** 文件中(见 `.env.example`); shell 里 `export` 的变量优先级更高,会覆盖 `.env`。
 
-环境变量:`OPENAI_API_KEY`、`OPENAI_MODEL`、`MINI_REMOTION_PROVIDER=stub|openai`、`MINI_REMOTION_TTS=noop`
+后续如需更复杂的多 Agent 能力,可接入 LangGraph.js;当前保持 TypeScript 栈一致,便于工程落地。
 
 ## 与真实 Remotion 的对应
 

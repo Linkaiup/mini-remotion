@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "React 画面表达 + Node 渲染引擎 + Python/LangGraph Agent 编排",
+  "description": "React 画面表达 + Node 渲染引擎 + TypeScript Harness 状态机编排",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -14,9 +14,11 @@
     "engine:validate": "tsx engine/validate.ts",
     "engine:render": "tsx engine/render-job.ts",
     "engine:tts": "tsx engine/tts-job.ts",
-    "agent": "PYTHONPATH=agent python3 -m video_agent.cli"
+    "agent": "tsx harness/cli.ts"
   },
   "dependencies": {
+    "dotenv": "^16.4.7",
+    "openai": "^4.77.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.25.76"
