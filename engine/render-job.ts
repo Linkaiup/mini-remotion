@@ -1,8 +1,21 @@
 import { resolve } from "node:path";
 import { ensureDevServer } from "./dev-server.js";
-import { captureFrames, encodeVideo } from "../render/pipeline.js";
+import {
+  captureFrames,
+  captureFramesWithPool,
+  encodeVideo,
+  probeMeta,
+  scheduleFrames,
+} from "../render/pipeline.js";
 
 export { ensureDevServer };
+export {
+  captureFrames,
+  captureFramesWithPool,
+  encodeVideo,
+  probeMeta,
+  scheduleFrames,
+};
 
 export const renderComposition = async (opts: {
   comp: string;
@@ -24,11 +37,11 @@ export const renderComposition = async (opts: {
   });
 };
 
-/** Harness 专用:仅逐帧截图 */
-export const captureCompositionFrames = captureFrames;
+/** Harness: Chromium Pool 截图 */
+export { captureFramesWithPool as captureCompositionFrames };
 
-/** Harness 专用:仅 FFmpeg 编码 */
-export const encodeCompositionVideo = encodeVideo;
+/** Harness: FFmpeg 编码 */
+export { encodeVideo as encodeCompositionVideo };
 
 // CLI
 import { pathToFileURL } from "node:url";

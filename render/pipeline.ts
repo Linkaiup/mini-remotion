@@ -1,11 +1,13 @@
 /**
- * 渲染管线 — 拆分为「逐帧截图」与「FFmpeg 编码」两阶段,
- * 供 Harness 状态机 RENDER_FRAMES / ENCODE_VIDEO 分别调用。
+ * 渲染管线 — Frame Scheduler + Chromium Pool + FFmpeg
  */
 import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { cpus } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { ChromiumPool, runPoolTasks } from "./chromium-pool.js";
+import { scheduleFrames } from "./frame-scheduler.js";
+import type { FrameSchedule } from "./frame-scheduler.js";
 
 export type Meta = {
   width: number;
@@ -28,6 +30,7 @@ export type CaptureResult = {
   framesDir: string;
   audios: AudioEntry[];
   elapsedSeconds: number;
+  schedule: FrameSchedule;
 };
 
 const LAUNCH_ARGS = [
@@ -61,9 +64,9 @@ export const splitRanges = (total: number, count: number): [number, number][] =>
 export const defaultConcurrency = (): number =>
   Math.min(4, Math.max(1, cpus().length));
 
-const renderChunk = async (
+const renderJob = async (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  puppeteer: any,
+  browser: any,
   args: {
     url: string;
     comp: string;
@@ -75,61 +78,84 @@ const renderChunk = async (
   onFrameDone: () => void,
 ): Promise<Meta> => {
   const { url, comp, range, propsB64 } = args;
-  const browser = await puppeteer.launch({
-    headless: true,
-    protocolTimeout: 60000,
-    args: LAUNCH_ARGS,
-  });
   const page = await browser.newPage();
-  const propsQuery = propsB64 ? `&props=${encodeURIComponent(propsB64)}` : "";
-  const target = `${url}/?headless=1&comp=${encodeURIComponent(comp)}${propsQuery}`;
-  await page.goto(target, { waitUntil: "networkidle0" });
+  try {
+    const propsQuery = propsB64 ? `&props=${encodeURIComponent(propsB64)}` : "";
+    const target = `${url}/?headless=1&comp=${encodeURIComponent(comp)}${propsQuery}`;
+    await page.goto(target, { waitUntil: "networkidle0" });
 
-  await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
-    timeout: 15000,
-  });
-  const meta = (await page.evaluate(() => window.__miniRemotionMeta!)) as Meta;
-  await page.setViewport({ width: meta.width, height: meta.height });
-
-  const canvas = await page.$("#mini-remotion-canvas");
-  if (!canvas) throw new Error("找不到 #mini-remotion-canvas");
-
-  for (let i = range[0]; i < range[1]; i++) {
-    await page.evaluate((frame: number) => {
-      window.__miniRemotionSetFrame?.(frame);
-    }, i);
-    await page.evaluate(
-      () =>
-        new Promise<void>((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => r())),
-        ),
-    );
-    await page.waitForFunction(() => window.__miniRemotionReady === true, {
+    await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
       timeout: 15000,
     });
-    const frameAudios = (await page.evaluate(
-      () => window.__miniRemotionGetAudio?.() ?? [],
-    )) as AudioEntry[];
-    for (const a of frameAudios) audioMap.set(a.id, a);
-    await canvas.screenshot({
-      path: join(framesDir, `frame-${String(i).padStart(6, "0")}.png`),
-    });
-    onFrameDone();
+    const meta = (await page.evaluate(() => window.__miniRemotionMeta!)) as Meta;
+    await page.setViewport({ width: meta.width, height: meta.height });
+
+    const canvas = await page.$("#mini-remotion-canvas");
+    if (!canvas) throw new Error("找不到 #mini-remotion-canvas");
+
+    for (let i = range[0]; i < range[1]; i++) {
+      await page.evaluate((frame: number) => {
+        window.__miniRemotionSetFrame?.(frame);
+      }, i);
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => r())),
+          ),
+      );
+      await page.waitForFunction(() => window.__miniRemotionReady === true, {
+        timeout: 15000,
+      });
+      const frameAudios = (await page.evaluate(
+        () => window.__miniRemotionGetAudio?.() ?? [],
+      )) as AudioEntry[];
+      for (const a of frameAudios) audioMap.set(a.id, a);
+      await canvas.screenshot({
+        path: join(framesDir, `frame-${String(i).padStart(6, "0")}.png`),
+      });
+      onFrameDone();
+    }
+    return meta;
+  } finally {
+    await page.close();
   }
-  await browser.close();
-  return meta;
 };
 
-/** RENDER_FRAMES: Chromium 逐帧截图 */
-export const captureFrames = async (opts: {
+/** 探测 composition meta(不占用 pool) */
+export const probeMeta = async (opts: {
+  comp: string;
+  url: string;
+  propsB64?: string;
+}): Promise<Meta> => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let puppeteer: any;
+  puppeteer = await import("puppeteer" as string);
+  const browser = await puppeteer.launch({ headless: true, args: LAUNCH_ARGS });
+  try {
+    const page = await browser.newPage();
+    const propsQuery = opts.propsB64 ? `&props=${encodeURIComponent(opts.propsB64)}` : "";
+    await page.goto(
+      `${opts.url}/?headless=1&comp=${encodeURIComponent(opts.comp)}${propsQuery}`,
+      { waitUntil: "networkidle0" },
+    );
+    await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
+      timeout: 15000,
+    });
+    return (await page.evaluate(() => window.__miniRemotionMeta!)) as Meta;
+  } finally {
+    await browser.close();
+  }
+};
+
+/** Chromium Pool: 按 FrameSchedule 并行截图 */
+export const captureFramesWithPool = async (opts: {
   comp: string;
   url?: string;
-  concurrency?: number;
+  schedule: FrameSchedule;
   propsB64?: string;
   framesDir?: string;
 }): Promise<CaptureResult> => {
   const url = opts.url ?? "http://localhost:5173";
-  const concurrency = opts.concurrency ?? defaultConcurrency();
   const propsB64 = opts.propsB64 ?? "";
   const framesDir = resolve(opts.framesDir ?? "out/frames");
 
@@ -144,51 +170,71 @@ export const captureFrames = async (opts: {
   await rm(framesDir, { recursive: true, force: true });
   await mkdir(framesDir, { recursive: true });
 
-  const probeBrowser = await puppeteer.launch({ headless: true, args: LAUNCH_ARGS });
-  const probe = await probeBrowser.newPage();
-  const propsQuery = propsB64 ? `&props=${encodeURIComponent(propsB64)}` : "";
-  await probe.goto(`${url}/?headless=1&comp=${encodeURIComponent(opts.comp)}${propsQuery}`, {
-    waitUntil: "networkidle0",
-  });
-  await probe.waitForFunction(() => Boolean(window.__miniRemotionMeta), { timeout: 15000 });
-  const probeMeta = (await probe.evaluate(() => window.__miniRemotionMeta!)) as Meta;
-  await probeBrowser.close();
-
-  const ranges = splitRanges(probeMeta.durationInFrames, concurrency);
+  const { jobs, poolSize, meta } = opts.schedule;
   console.log(
-    `[pipeline] ${opts.comp}: ${probeMeta.durationInFrames} 帧 → ${ranges.length} 段并行`,
+    `[chromium-pool] ${opts.comp}: ${meta.durationInFrames} 帧 → ${jobs.length} 任务, pool=${poolSize}`,
   );
 
   const audioMap = new Map<string, AudioEntry>();
   let done = 0;
-  const total = probeMeta.durationInFrames;
+  const total = meta.durationInFrames;
   const onFrameDone = () => {
     done++;
     if (done % 15 === 0 || done === total) {
-      process.stdout.write(`\r[pipeline] 截图 ${done}/${total}`);
+      process.stdout.write(`\r[chromium-pool] 截图 ${done}/${total}`);
     }
   };
 
+  const pool = await ChromiumPool.create(puppeteer, poolSize, LAUNCH_ARGS);
   const started = Date.now();
-  const metas = await Promise.all(
-    ranges.map((range) =>
-      renderChunk(
-        puppeteer,
-        { url, comp: opts.comp, range, propsB64 },
-        framesDir,
-        audioMap,
-        onFrameDone,
-      ),
-    ),
-  );
-  process.stdout.write("\n");
 
-  return {
-    meta: metas[0],
-    framesDir,
-    audios: Array.from(audioMap.values()),
-    elapsedSeconds: (Date.now() - started) / 1000,
-  };
+  try {
+    const metas = await runPoolTasks(
+      pool,
+      jobs.map(
+        (job) => (browser) =>
+          renderJob(
+            browser,
+            { url, comp: opts.comp, range: job.range, propsB64 },
+            framesDir,
+            audioMap,
+            onFrameDone,
+          ),
+      ),
+    );
+    process.stdout.write("\n");
+
+    return {
+      meta: metas[0],
+      framesDir,
+      audios: Array.from(audioMap.values()),
+      elapsedSeconds: (Date.now() - started) / 1000,
+      schedule: opts.schedule,
+    };
+  } finally {
+    await pool.close();
+  }
+};
+
+/** 兼容旧 API: 内部 probe + schedule + pool */
+export const captureFrames = async (opts: {
+  comp: string;
+  url?: string;
+  concurrency?: number;
+  propsB64?: string;
+  framesDir?: string;
+}): Promise<CaptureResult> => {
+  const url = opts.url ?? "http://localhost:5173";
+  const poolSize = opts.concurrency ?? defaultConcurrency();
+  const meta = await probeMeta({ comp: opts.comp, url, propsB64: opts.propsB64 });
+  const schedule = scheduleFrames(meta, poolSize);
+  return captureFramesWithPool({
+    comp: opts.comp,
+    url,
+    schedule,
+    propsB64: opts.propsB64,
+    framesDir: opts.framesDir,
+  });
 };
 
 const mixAudio = async (
@@ -239,7 +285,7 @@ const mixAudio = async (
   ]);
 };
 
-/** ENCODE_VIDEO: FFmpeg 编码帧序列 + 可选音频混流 */
+/** FFmpeg: 编码帧序列 + 可选音频混流 */
 export const encodeVideo = async (opts: {
   meta: Meta;
   framesDir: string;
@@ -251,7 +297,7 @@ export const encodeVideo = async (opts: {
   const hasAudio = opts.audios.length > 0;
   const silentOut = hasAudio ? resolve("out/_silent.mp4") : finalOut;
 
-  console.log("[pipeline] FFmpeg 编码画面…");
+  console.log("[ffmpeg] 编码画面…");
   await runFfmpeg([
     "-y",
     "-framerate",
@@ -266,10 +312,13 @@ export const encodeVideo = async (opts: {
   ]);
 
   if (hasAudio) {
-    console.log(`[pipeline] 混流 ${opts.audios.length} 条音频…`);
+    console.log(`[ffmpeg] 混流 ${opts.audios.length} 条音频…`);
     await mixAudio(silentOut, opts.audios, opts.meta.fps, opts.out);
     await rm(silentOut, { force: true });
   }
 
   return finalOut;
 };
+
+export { scheduleFrames } from "./frame-scheduler.js";
+export type { FrameJob, FrameSchedule } from "./frame-scheduler.js";

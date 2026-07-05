@@ -92,6 +92,9 @@ const main = async () => {
   if (result.videoPath) console.log(`  video:    ${result.videoPath}`);
   if (result.quality)
     console.log(`  quality:  ${result.quality.score.toFixed(2)}`);
+  if (result.timeline)
+    console.log(`  timeline: ${result.timeline.scenes.length} 场景`);
+  if (result.manifestPath) console.log(`  manifest: ${result.manifestPath}`);
   if (result.tts)
     console.log(
       `  audio:    public/${result.tts.mp3Path} (${result.tts.durationSeconds.toFixed(1)}s)`,

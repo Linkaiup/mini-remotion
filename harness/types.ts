@@ -1,15 +1,24 @@
-import type { AudioEntry, Meta } from "../render/pipeline.js";
+import type { FrameSchedule, Meta, AudioEntry } from "../render/pipeline.js";
 import type { ChatMessage } from "./llm/types.js";
 import type { QualityResult } from "./quality.js";
+import type { VideoTimeline } from "./timeline/types.js";
 
-/** Harness 状态机状态 */
+/**
+ * Harness Agent 流水线状态
+ *
+ * User Prompt → INIT → TIMELINE_PLAN → COMPOSE → VALIDATE
+ *   → FRAME_SCHEDULE → CHROMIUM_POOL → FFMPEG → QUALITY_CHECK → OUTPUT → DONE
+ */
 export type HarnessStatus =
   | "INIT"
-  | "PLAN"
-  | "VALIDATE_PLAN"
-  | "RENDER_FRAMES"
-  | "ENCODE_VIDEO"
-  | "EVALUATE"
+  | "TIMELINE_PLAN"
+  | "COMPOSE"
+  | "VALIDATE"
+  | "FRAME_SCHEDULE"
+  | "CHROMIUM_POOL"
+  | "FFMPEG"
+  | "QUALITY_CHECK"
+  | "OUTPUT"
   | "OPTIMIZE"
   | "DONE"
   | "FAILED";
@@ -44,6 +53,12 @@ export type HarnessContext = {
   providerName: string;
   tts?: { mp3Path: string; durationSeconds: number };
 
+  /** Timeline Planning 产出 */
+  timeline?: VideoTimeline;
+  /** Frame Scheduler 产出 */
+  frameSchedule?: FrameSchedule;
+  durationHint?: number;
+
   lastErrors: string;
   framesDir: string;
   meta?: Meta;
@@ -51,7 +66,6 @@ export type HarnessContext = {
   videoPath?: string;
   quality?: QualityResult;
 
-  /** 渲染阶段耗时(秒),用于 OPTIMIZE 决策 */
   renderElapsedSeconds?: number;
   error?: string;
 };
@@ -60,6 +74,8 @@ export type HarnessResult = {
   status: "DONE" | "FAILED";
   codePath: string;
   videoPath?: string;
+  manifestPath?: string;
+  timeline?: VideoTimeline;
   provider: string;
   attempts: number;
   quality?: QualityResult;

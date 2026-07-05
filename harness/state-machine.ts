@@ -1,35 +1,31 @@
 /**
- * Harness Agent — TypeScript 轻量状态机。
+ * Harness Agent — 流水线状态机
  *
- * 状态: INIT → PLAN → VALIDATE_PLAN → RENDER_FRAMES → ENCODE_VIDEO → EVALUATE → DONE
- *       失败恢复: VALIDATE_PLAN / EVALUATE → OPTIMIZE → PLAN
- *       终态: DONE | FAILED
- *
- * React(src/) = 画面 | Node(engine/ + render/) = 渲染 | harness/ = 编排
+ * User Prompt → Harness Agent → Timeline Planning → React Composition
+ *   → Frame Scheduler → Chromium Pool → FFmpeg → Quality Check → Output
  */
 import { resolve } from "node:path";
 import { ensureDevServer } from "../engine/dev-server.js";
-import { captureCompositionFrames, encodeCompositionVideo } from "../engine/render-job.js";
-import { synthTTS } from "../engine/tts-job.js";
-import { extractCode } from "./code.js";
-import { selectProvider } from "./llm/index.js";
 import {
-  SYSTEM_PROMPT,
-  buildUserMessage,
-  enrichPromptWithTts,
-} from "./prompts.js";
+  captureFramesWithPool,
+  encodeCompositionVideo,
+  probeMeta,
+  scheduleFrames,
+} from "../engine/render-job.js";
+import { synthTTS } from "../engine/tts-job.js";
+import {
+  composeFromTimeline,
+  initCompositionMessages,
+} from "./composition/compose.js";
+import { enrichPromptWithTts } from "./composition/prompts.js";
+import { selectProvider } from "./llm/index.js";
+import { harnessFail, harnessLog } from "./log.js";
+import { finalizeOutput } from "./output.js";
 import { evaluateVideo } from "./quality.js";
 import { optimizeConcurrency, pickConcurrency } from "./scheduler.js";
-import type {
-  HarnessContext,
-  HarnessOptions,
-  HarnessResult,
-} from "./types.js";
-import {
-  appendRepairMessage,
-  validatePlan,
-} from "./validate-plan.js";
-import { harnessFail, harnessLog } from "./log.js";
+import { planTimeline } from "./timeline/plan.js";
+import type { HarnessContext, HarnessOptions, HarnessResult } from "./types.js";
+import { appendRepairMessage, validatePlan } from "./validate-plan.js";
 
 const log = harnessLog;
 
@@ -48,10 +44,7 @@ const initContext = (opts: HarnessOptions): HarnessContext => {
     attempts: 0,
     optimizeRound: 0,
     enrichedPrompt: opts.prompt,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserMessage(opts.prompt).content },
-    ],
+    messages: [],
     code: "",
     providerName: provider.name,
     lastErrors: "",
@@ -61,7 +54,7 @@ const initContext = (opts: HarnessOptions): HarnessContext => {
 };
 
 const stepInit = async (ctx: HarnessContext): Promise<void> => {
-  log("INIT", "初始化 Harness 上下文");
+  log("INIT", "Harness Agent 启动");
 
   if (ctx.narration && !ctx.noTts && process.env.MINI_REMOTION_TTS !== "noop") {
     try {
@@ -72,85 +65,139 @@ const stepInit = async (ctx: HarnessContext): Promise<void> => {
         ctx.tts.mp3Path,
         ctx.tts.durationSeconds,
       );
-      ctx.messages[1] = buildUserMessage(ctx.enrichedPrompt);
+      ctx.durationHint = Math.ceil(ctx.tts.durationSeconds * 30);
+      log("INIT", `   旁白 ${ctx.tts.durationSeconds.toFixed(1)}s → ${ctx.durationHint} 帧`);
     } catch (e) {
-      log("INIT", `TTS 跳过: ${e}`);
+      log("INIT", `   TTS 跳过: ${e}`);
     }
   }
 
-  ctx.status = "PLAN";
+  ctx.status = "TIMELINE_PLAN";
 };
 
-const stepPlan = async (ctx: HarnessContext): Promise<void> => {
+const stepTimelinePlan = async (ctx: HarnessContext): Promise<void> => {
+  log("TIMELINE_PLAN", "规划分镜时间线…");
+  ctx.timeline = await planTimeline(ctx.enrichedPrompt, {
+    durationInFrames: ctx.durationHint,
+  });
+  for (const s of ctx.timeline.scenes) {
+    log("TIMELINE_PLAN", `   [${s.startFrame}-${s.endFrame}] ${s.label}: ${s.description.slice(0, 40)}`);
+  }
+  ctx.messages = initCompositionMessages(ctx.enrichedPrompt, ctx.timeline);
+  ctx.status = "COMPOSE";
+};
+
+const stepCompose = async (ctx: HarnessContext): Promise<void> => {
+  if (!ctx.timeline) {
+    ctx.status = "FAILED";
+    ctx.error = "缺少 timeline";
+    return;
+  }
+
   ctx.attempts += 1;
-  log("PLAN", `LLM 生成 TSX (${ctx.attempts}/${ctx.maxRetries}, ${ctx.providerName})…`);
+  log("COMPOSE", `React Composition (${ctx.attempts}/${ctx.maxRetries})…`);
 
-  const provider = selectProvider();
-  const raw = await provider.complete(ctx.messages);
-  ctx.code = extractCode(raw);
-  ctx.messages.push({ role: "assistant", content: raw });
-  log("PLAN", `   已生成 ${ctx.code.split("\n").length} 行代码`);
-
-  ctx.status = "VALIDATE_PLAN";
+  const { code, messages } = await composeFromTimeline(
+    ctx.enrichedPrompt,
+    ctx.timeline,
+    ctx.messages.length > 0 ? ctx.messages : undefined,
+  );
+  ctx.code = code;
+  ctx.messages = messages;
+  ctx.status = "VALIDATE";
 };
 
-const stepValidatePlan = async (ctx: HarnessContext): Promise<void> => {
+const stepValidate = async (ctx: HarnessContext): Promise<void> => {
   const result = await validatePlan(ctx);
   if (!result.ok) {
     ctx.lastErrors = result.errors;
-    appendRepairMessage(ctx, result.errors);
     const retryLeft = ctx.maxRetries - ctx.attempts;
     if (retryLeft > 0) {
-      log("VALIDATE_PLAN", `将重试, 剩余 ${retryLeft} 次`);
+      log("VALIDATE", `将重试 COMPOSE, 剩余 ${retryLeft} 次`);
       ctx.status = "OPTIMIZE";
     } else {
-      harnessFail("VALIDATE_PLAN", `已达最大重试 (${ctx.maxRetries}), 终止`, result.errors);
+      harnessFail("VALIDATE", `已达最大重试 (${ctx.maxRetries}), 终止`, result.errors);
       ctx.status = "FAILED";
     }
     ctx.error = `[${result.stage}] ${ctx.lastErrors}`;
     return;
   }
 
-  log("VALIDATE_PLAN", "全部通过 ✓");
-  if (ctx.skipRender) {
-    ctx.status = "DONE";
-  } else {
-    ctx.status = "RENDER_FRAMES";
+  log("VALIDATE", "全部通过 ✓");
+  ctx.status = ctx.skipRender ? "OUTPUT" : "FRAME_SCHEDULE";
+};
+
+const stepFrameSchedule = async (ctx: HarnessContext): Promise<void> => {
+  log("FRAME_SCHEDULE", "探测 meta + 切分帧任务…");
+  await ensureDevServer();
+
+  const url = process.env.MINI_REMOTION_DEV_URL ?? "http://localhost:5173";
+  try {
+    const meta = await probeMeta({ comp: "GeneratedVideo", url });
+    ctx.meta = meta;
+    ctx.frameSchedule = scheduleFrames(meta, ctx.concurrency);
+    for (const job of ctx.frameSchedule.jobs) {
+      log(
+        "FRAME_SCHEDULE",
+        `   job#${job.id} 帧 ${job.range[0]}–${job.range[1]} (${job.frameCount} 帧)`,
+      );
+    }
+    log(
+      "FRAME_SCHEDULE",
+      `   共 ${ctx.frameSchedule.totalFrames} 帧, pool=${ctx.frameSchedule.poolSize}`,
+    );
+    ctx.status = "CHROMIUM_POOL";
+  } catch (e) {
+    ctx.lastErrors = String(e);
+    ctx.error = ctx.lastErrors;
+    harnessFail("FRAME_SCHEDULE", "调度失败", ctx.lastErrors);
+    ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
   }
 };
 
-const stepRenderFrames = async (ctx: HarnessContext): Promise<void> => {
-  log("RENDER_FRAMES", `Chromium 逐帧截图 (concurrency=${ctx.concurrency})`);
-  await ensureDevServer();
+const stepChromiumPool = async (ctx: HarnessContext): Promise<void> => {
+  if (!ctx.frameSchedule) {
+    ctx.status = "FAILED";
+    ctx.error = "缺少 frameSchedule";
+    return;
+  }
+
+  log("CHROMIUM_POOL", `并行截图 pool=${ctx.frameSchedule.poolSize}…`);
+  const url = process.env.MINI_REMOTION_DEV_URL ?? "http://localhost:5173";
 
   try {
-    const captured = await captureCompositionFrames({
+    const captured = await captureFramesWithPool({
       comp: "GeneratedVideo",
-      concurrency: ctx.concurrency,
+      url,
+      schedule: ctx.frameSchedule,
+      framesDir: ctx.framesDir,
     });
     ctx.meta = captured.meta;
     ctx.framesDir = captured.framesDir;
     ctx.audios = captured.audios;
     ctx.renderElapsedSeconds = captured.elapsedSeconds;
-    log("RENDER_FRAMES", `完成 ${captured.elapsedSeconds.toFixed(1)}s, ${captured.meta.durationInFrames} 帧`);
-    ctx.status = "ENCODE_VIDEO";
+    log(
+      "CHROMIUM_POOL",
+      `   完成 ${captured.elapsedSeconds.toFixed(1)}s, ${captured.meta.durationInFrames} 帧`,
+    );
+    ctx.status = "FFMPEG";
   } catch (e) {
     ctx.lastErrors = String(e);
     ctx.error = ctx.lastErrors;
-    harnessFail("RENDER_FRAMES", "截图失败", ctx.lastErrors);
+    harnessFail("CHROMIUM_POOL", "截图失败", ctx.lastErrors);
     ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
   }
 };
 
-const stepEncodeVideo = async (ctx: HarnessContext): Promise<void> => {
+const stepFfmpeg = async (ctx: HarnessContext): Promise<void> => {
   if (!ctx.meta) {
-    harnessFail("ENCODE_VIDEO", "缺少 meta, 无法编码");
+    harnessFail("FFMPEG", "缺少 meta, 无法编码");
     ctx.status = "FAILED";
-    ctx.error = "缺少 meta,无法编码";
+    ctx.error = "缺少 meta";
     return;
   }
 
-  log("ENCODE_VIDEO", "FFmpeg 编码 + 音频混流");
+  log("FFMPEG", "编码 + 音频混流…");
   try {
     ctx.videoPath = await encodeCompositionVideo({
       meta: ctx.meta,
@@ -158,85 +205,113 @@ const stepEncodeVideo = async (ctx: HarnessContext): Promise<void> => {
       audios: ctx.audios,
       out: ctx.out,
     });
-    log("ENCODE_VIDEO", `完成 → ${ctx.videoPath}`);
-    ctx.status = "EVALUATE";
+    log("FFMPEG", `   完成 → ${ctx.videoPath}`);
+    ctx.status = "QUALITY_CHECK";
   } catch (e) {
     ctx.lastErrors = String(e);
     ctx.error = ctx.lastErrors;
-    harnessFail("ENCODE_VIDEO", "编码失败", ctx.lastErrors);
+    harnessFail("FFMPEG", "编码失败", ctx.lastErrors);
     ctx.status = ctx.attempts >= ctx.maxRetries ? "FAILED" : "OPTIMIZE";
   }
 };
 
-const stepEvaluate = async (ctx: HarnessContext): Promise<void> => {
+const stepQualityCheck = async (ctx: HarnessContext): Promise<void> => {
   if (!ctx.videoPath) {
-    ctx.status = "DONE";
+    ctx.status = "OUTPUT";
     return;
   }
 
-  log("EVALUATE", "质量评测(ffprobe)");
+  log("QUALITY_CHECK", "ffprobe 评测…");
   ctx.quality = await evaluateVideo(ctx.videoPath);
   log(
-    "EVALUATE",
-    `评分 ${ctx.quality.score.toFixed(2)} (${ctx.quality.ok ? "通过" : "有问题"})`,
+    "QUALITY_CHECK",
+    `   评分 ${ctx.quality.score.toFixed(2)} (${ctx.quality.ok ? "通过" : "有问题"})`,
   );
 
-  if (
-    !ctx.quality.ok ||
-    ctx.quality.score < ctx.minQualityScore
-  ) {
+  if (!ctx.quality.ok || ctx.quality.score < ctx.minQualityScore) {
     const detail = ctx.quality.issues.join("\n");
     if (ctx.attempts < ctx.maxRetries) {
       ctx.lastErrors = detail;
-      harnessFail("EVALUATE", `质量未达标 (${ctx.quality.score.toFixed(2)} < ${ctx.minQualityScore})`, detail);
+      harnessFail(
+        "QUALITY_CHECK",
+        `质量未达标 (${ctx.quality.score.toFixed(2)} < ${ctx.minQualityScore})`,
+        detail,
+      );
       ctx.status = "OPTIMIZE";
       return;
     }
-    harnessFail("EVALUATE", "质量未达标且已达最大重试", detail);
+    harnessFail("QUALITY_CHECK", "质量未达标且已达最大重试", detail);
   }
 
+  ctx.status = "OUTPUT";
+};
+
+// extend context for output step
+type HarnessContextWithResult = HarnessContext & {
+  finalResult?: HarnessResult;
+};
+
+const stepOutput = async (ctx: HarnessContextWithResult): Promise<void> => {
+  ctx.finalResult = await finalizeOutput(ctx, {
+    codePath: resolve("src/generated/current.tsx"),
+    videoPath: ctx.videoPath,
+    provider: ctx.providerName,
+    attempts: ctx.attempts,
+    quality: ctx.quality,
+    tts: ctx.tts,
+    timeline: ctx.timeline,
+  });
   ctx.status = "DONE";
 };
 
 const stepOptimize = async (ctx: HarnessContext): Promise<void> => {
   ctx.optimizeRound += 1;
-  const reason = ctx.meta ? "quality" : ctx.renderElapsedSeconds ? "render" : "validate";
+  const reason = ctx.meta && ctx.quality ? "quality" : ctx.renderElapsedSeconds ? "render" : "validate";
   ctx.concurrency = optimizeConcurrency(ctx.concurrency, reason);
 
   log(
     "OPTIMIZE",
-    `第 ${ctx.optimizeRound} 轮 → concurrency=${ctx.concurrency}, 回 PLAN (${reason})`,
+    `第 ${ctx.optimizeRound} 轮 → pool=${ctx.concurrency}, 回 COMPOSE (${reason})`,
   );
 
-  if (ctx.lastErrors && ctx.code) {
+  if (ctx.lastErrors && ctx.code && ctx.messages.length > 0) {
     appendRepairMessage(ctx, ctx.lastErrors);
   }
 
-  ctx.status = "PLAN";
+  ctx.status = "COMPOSE";
 };
 
 export const runHarness = async (opts: HarnessOptions): Promise<HarnessResult> => {
-  const ctx = initContext(opts);
+  const ctx = initContext(opts) as HarnessContextWithResult;
 
   while (ctx.status !== "DONE" && ctx.status !== "FAILED") {
     switch (ctx.status) {
       case "INIT":
         await stepInit(ctx);
         break;
-      case "PLAN":
-        await stepPlan(ctx);
+      case "TIMELINE_PLAN":
+        await stepTimelinePlan(ctx);
         break;
-      case "VALIDATE_PLAN":
-        await stepValidatePlan(ctx);
+      case "COMPOSE":
+        await stepCompose(ctx);
         break;
-      case "RENDER_FRAMES":
-        await stepRenderFrames(ctx);
+      case "VALIDATE":
+        await stepValidate(ctx);
         break;
-      case "ENCODE_VIDEO":
-        await stepEncodeVideo(ctx);
+      case "FRAME_SCHEDULE":
+        await stepFrameSchedule(ctx);
         break;
-      case "EVALUATE":
-        await stepEvaluate(ctx);
+      case "CHROMIUM_POOL":
+        await stepChromiumPool(ctx);
+        break;
+      case "FFMPEG":
+        await stepFfmpeg(ctx);
+        break;
+      case "QUALITY_CHECK":
+        await stepQualityCheck(ctx);
+        break;
+      case "OUTPUT":
+        await stepOutput(ctx);
         break;
       case "OPTIMIZE":
         await stepOptimize(ctx);
@@ -251,13 +326,5 @@ export const runHarness = async (opts: HarnessOptions): Promise<HarnessResult> =
     throw new Error(ctx.error ?? "Harness 失败");
   }
 
-  return {
-    status: "DONE",
-    codePath: resolve("src/generated/current.tsx"),
-    videoPath: ctx.videoPath,
-    provider: ctx.providerName,
-    attempts: ctx.attempts,
-    quality: ctx.quality,
-    tts: ctx.tts,
-  };
+  return ctx.finalResult!;
 };

@@ -110,10 +110,31 @@ npm run render -- --comp CodeDemo --out out/video.mp4 \
 
 ## Enhanced Video Agent(文本 → 视频)
 
-**TypeScript Harness 状态机**负责编排;**Node** 负责渲染;**React** 负责画面。
+**TypeScript Harness Agent** 负责编排;**Node** 负责渲染;**React** 负责画面。
 
-Harness 状态:`INIT → PLAN → VALIDATE_PLAN → RENDER_FRAMES → ENCODE_VIDEO → EVALUATE → DONE`  
-失败恢复:`VALIDATE_PLAN / EVALUATE → OPTIMIZE → PLAN`  
+```
+User Prompt
+    ↓
+Harness Agent (INIT)
+    ↓
+Timeline Planning   → harness/timeline/     分镜 JSON
+    ↓
+React Composition   → harness/composition/  LLM 生成 TSX
+    ↓
+Validate            → tsc + 冒烟
+    ↓
+Frame Scheduler     → render/frame-scheduler.ts
+    ↓
+Chromium Pool       → render/chromium-pool.ts
+    ↓
+FFmpeg              → render/pipeline.ts
+    ↓
+Quality Check       → harness/quality.ts
+    ↓
+Output              → out/*.mp4 + agent-manifest.json
+```
+
+失败恢复:`VALIDATE / QUALITY_CHECK → OPTIMIZE → COMPOSE`  
 终态:`DONE | FAILED`
 
 ```bash
@@ -136,7 +157,12 @@ MINI_REMOTION_PROVIDER=stub npm run agent -- "测试" --no-render
 |------|--------|------|
 | `src/` | React | 画面表达:`useCurrentFrame`、组件、动画 |
 | `engine/` + `render/` | Node.js | 写 generated、校验(tsc+冒烟)、并发截图、FFmpeg |
-| `harness/` | TypeScript 状态机 | LLM 生成 TSX、自愈循环、调度、质量评测 |
+| `harness/timeline/` | Timeline Planning | LLM/stub 输出分镜 JSON |
+| `harness/composition/` | React Composition | 按时间线生成 TSX |
+| `render/frame-scheduler.ts` | Frame Scheduler | 切分并行帧任务 |
+| `render/chromium-pool.ts` | Chromium Pool | 浏览器进程池截图 |
+| `render/pipeline.ts` | FFmpeg | 编码 + 混流 |
+| `harness/quality.ts` | Quality Check | ffprobe 评测 |
 
 环境变量:`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`(默认 `deepseek-v4-pro`)、`DEEPSEEK_BASE_URL`、`MINI_REMOTION_PROVIDER=stub|deepseek|openai`、`MINI_REMOTION_TTS=noop`  
 也支持 OpenAI 兼容配置:`OPENAI_API_KEY`、`OPENAI_MODEL`、`OPENAI_BASE_URL`。  
