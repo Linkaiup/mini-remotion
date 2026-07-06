@@ -11,6 +11,7 @@ import {
 export { ensureDevServer } from "./dev-server.js";
 export { ensureRenderSite, getRenderSiteMode, getRenderSiteUrl } from "./render-site.js";
 export { ensureBundle, buildBundle } from "./bundle.js";
+export { ensureOffthreadServer, closeOffthreadServer } from "../render/offthread/index.js";
 export {
   captureFrames,
   captureFramesWithPool,
@@ -34,7 +35,7 @@ export const renderComposition = async (opts: {
   return encodeVideo({
     meta: captured.meta,
     framesDir: captured.framesDir,
-    audios: captured.audios,
+    renderAssets: captured.renderAssets,
     out: opts.out,
   });
 };

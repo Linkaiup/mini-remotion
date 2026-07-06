@@ -33,7 +33,7 @@ const main = async () => {
   const workerId = `remote-${process.pid}`;
   console.log(`[queue:worker] ${workerId} 加入批次 ${batchId}`);
 
-  const { processed, audios } = await runQueueWorker(batchId, workerId, puppeteer);
+  const { processed, renderAssets } = await runQueueWorker(batchId, workerId, puppeteer);
 
   const pending = await countJobs(batchId, "pending");
   const running = await countJobs(batchId, "running");
@@ -45,7 +45,7 @@ const main = async () => {
       ok: true,
       workerId,
       processed,
-      audios: audios.length,
+      renderAssets: renderAssets.length,
       queue: { pending, running, done, failed },
     }),
   );

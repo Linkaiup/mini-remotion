@@ -1,8 +1,13 @@
 import React from "react";
-import { interpolate, staticFile, useCurrentFrame, Video } from "../core";
+import {
+  interpolate,
+  OffthreadVideo,
+  staticFile,
+  useCurrentFrame,
+} from "../core";
 
 /**
- * 演示 <Video> 组件:底层视频铺满画布,上层叠加半透明标题。
+ * 演示 <OffthreadVideo>:预览走 <Video>,导出走 FFmpeg /proxy 抽帧 + 视频音轨混流(P4-c)。
  * 需先运行 npm run make-video 生成 public/sample.mp4。
  */
 const FPS = 30;
@@ -24,11 +29,10 @@ export const VideoDemo: React.FC = () => {
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "#000" }}>
-      <Video
+      <OffthreadVideo
         src={staticFile("sample.mp4")}
         style={{ width: "100%", height: "100%" }}
-        volume={0}
-        muted
+        volume={1}
       />
       <div
         style={{

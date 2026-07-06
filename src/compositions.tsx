@@ -9,6 +9,7 @@ import {
   codeDemoSchema,
 } from "./video/CodeDemo";
 import { VideoDemo, videoDemoMeta } from "./video/VideoDemo";
+import { AudioFadeDemo, audioFadeDemoMeta } from "./video/AudioFadeDemo";
 import {
   VideoComposition as GeneratedVideo,
   meta as generatedMeta,
@@ -41,7 +42,7 @@ export const compositions: AnyComposition[] = [
     defaultProps: codeDemoDefaultProps,
     component: CodeDemo as AnyComposition["component"],
   },
-  // <Video> 组件演示(需 npm run make-video)
+  // <OffthreadVideo> 演示(需 npm run make-video)
   {
     id: "VideoDemo",
     width: videoDemoMeta.width,
@@ -50,6 +51,16 @@ export const compositions: AnyComposition[] = [
     durationInFrames: videoDemoMeta.durationInFrames,
     defaultProps: {},
     component: VideoDemo as AnyComposition["component"],
+  },
+  // 音量曲线演示(需 npm run make-audio)
+  {
+    id: "AudioFadeDemo",
+    width: audioFadeDemoMeta.width,
+    height: audioFadeDemoMeta.height,
+    fps: audioFadeDemoMeta.fps,
+    durationInFrames: audioFadeDemoMeta.durationInFrames,
+    defaultProps: {},
+    component: AudioFadeDemo as AnyComposition["component"],
   },
   // Agent 生成的视频(内容来自 src/generated/current.tsx)
   {

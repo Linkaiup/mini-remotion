@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { ensureRenderSite } from "./render-site.js";
+import { ensureOffthreadServer } from "../render/offthread/index.js";
+import { buildHeadlessUrl } from "../render/headless-url.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,6 +28,7 @@ export const smokeTestAtFrames = async (
   frames: number[],
 ): Promise<string | null> => {
   const baseUrl = await ensureRenderSite();
+  const offthread = await ensureOffthreadServer();
   await wait(1200);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,8 +62,12 @@ export const smokeTestAtFrames = async (
   });
 
   try {
-    const url = `${baseUrl}/?headless=1&comp=GeneratedVideo&_t=${Date.now()}`;
-    await page.goto(url, { waitUntil: "networkidle0", timeout: 20000 });
+    const url = buildHeadlessUrl({
+      baseUrl,
+      comp: "GeneratedVideo",
+      proxyPort: offthread.port,
+    });
+    await page.goto(`${url}&_t=${Date.now()}`, { waitUntil: "networkidle0", timeout: 20000 });
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
       timeout: 15000,
     });

@@ -1,5 +1,5 @@
 import type { CostSummary, CostTracker } from "./cost/tracker.js";
-import type { FrameSchedule, Meta, AudioEntry } from "../render/pipeline.js";
+import type { FrameSchedule, Meta, RenderAsset } from "../render/pipeline.js";
 import type { ResolvedAsset } from "./assets/types.js";
 import type { ChatMessage } from "./llm/types.js";
 import type { FailureKind } from "./failure-router.js";
@@ -79,7 +79,7 @@ export type HarnessContext = {
   lastFailureKind?: FailureKind;
   framesDir: string;
   meta?: Meta;
-  audios: AudioEntry[];
+  renderAssets: RenderAsset[];
   videoPath?: string;
   quality?: QualityResult;
   preview?: { ok: boolean; score: number; issues: string[] };

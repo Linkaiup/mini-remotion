@@ -1,10 +1,9 @@
 import React from "react";
 import {
-  AudioManagerProvider,
   FrameProvider,
   PlaybackProvider,
+  RenderAssetManagerProvider,
   VideoConfigProvider,
-  VideoManagerProvider,
 } from "../core";
 import type { Composition } from "../core";
 
@@ -52,13 +51,11 @@ export const Preview: React.FC<{
           }}
         >
           <PlaybackProvider playing={playing}>
-            <AudioManagerProvider>
-              <VideoManagerProvider>
-                <FrameProvider frame={frame}>
-                  <Component {...inputProps} />
-                </FrameProvider>
-              </VideoManagerProvider>
-            </AudioManagerProvider>
+            <RenderAssetManagerProvider>
+              <FrameProvider frame={frame}>
+                <Component {...inputProps} />
+              </FrameProvider>
+            </RenderAssetManagerProvider>
           </PlaybackProvider>
         </VideoConfigProvider>
       </div>

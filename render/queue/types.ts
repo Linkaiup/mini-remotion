@@ -1,7 +1,7 @@
 /**
  * 分布式帧截图队列 — 类型定义。
  */
-import type { AudioEntry } from "../pipeline.js";
+import type { RenderAsset } from "../pipeline.js";
 
 export type QueueJobStatus = "pending" | "running" | "done" | "failed";
 
@@ -21,8 +21,8 @@ export type FrameCaptureJob = {
   startedAt?: number;
   finishedAt?: number;
   error?: string;
-  /** worker 完成时附带的音频轨清单 */
-  audios?: AudioEntry[];
+  /** worker 完成时附带的媒体资产清单(audio + video 音轨) */
+  renderAssets?: RenderAsset[];
 };
 
 export type FrameCaptureBatch = {

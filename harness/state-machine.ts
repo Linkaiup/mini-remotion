@@ -111,7 +111,7 @@ const initContext = (opts: HarnessOptions): HarnessContext => {
     providerName: provider.name,
     lastErrors: "",
     framesDir: resolve("out/frames"),
-    audios: [],
+    renderAssets: [],
   };
 };
 
@@ -369,7 +369,7 @@ const stepChromiumPool = async (ctx: HarnessContext): Promise<void> => {
     );
     ctx.meta = captured.meta;
     ctx.framesDir = captured.framesDir;
-    ctx.audios = captured.audios;
+    ctx.renderAssets = captured.renderAssets;
     ctx.renderElapsedSeconds = captured.elapsedSeconds;
     log(
       "CHROMIUM_POOL",
@@ -396,7 +396,7 @@ const stepFfmpeg = async (ctx: HarnessContext): Promise<void> => {
     ctx.videoPath = await encodeCompositionVideo({
       meta: ctx.meta,
       framesDir: ctx.framesDir,
-      audios: ctx.audios,
+      renderAssets: ctx.renderAssets,
       out: ctx.out,
     });
     log("FFMPEG", `   完成 → ${ctx.videoPath}`);

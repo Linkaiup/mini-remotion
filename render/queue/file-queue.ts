@@ -14,7 +14,7 @@
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { FrameCaptureBatch, FrameCaptureJob, QueueJobStatus } from "./types.js";
-import type { AudioEntry } from "../pipeline.js";
+import type { RenderAsset } from "../pipeline.js";
 
 const QUEUE_ROOT = resolve("out/queue");
 
@@ -101,11 +101,11 @@ const moveJob = async (
 export const completeJob = async (
   batchId: string,
   jobId: string,
-  audios?: AudioEntry[],
+  renderAssets?: RenderAsset[],
 ): Promise<void> =>
   moveJob(batchId, jobId, "running", "done", {
     finishedAt: Date.now(),
-    ...(audios ? { audios } : {}),
+    ...(renderAssets ? { renderAssets } : {}),
   });
 
 export const failJob = async (

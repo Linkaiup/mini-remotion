@@ -7,8 +7,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { AudioEntry, Meta } from "../pipeline.js";
+import type { Meta, RenderAsset } from "../pipeline.js";
+import { mergeFrameAssets } from "../pipeline.js";
 import type { FrameSchedule } from "../frame-scheduler.js";
+import { buildHeadlessUrl } from "../headless-url.js";
+import { ensureOffthreadServer } from "../offthread/index.js";
 import {
   claimNextJob,
   completeJob,
@@ -35,14 +38,19 @@ export const executeCaptureRange = async (
     propsB64: string;
     framesDir: string;
   },
-): Promise<{ meta: Meta; audios: AudioEntry[] }> => {
+): Promise<{ meta: Meta; renderAssets: RenderAsset[] }> => {
   const { url, comp, range, propsB64, framesDir } = job;
   const { join } = await import("node:path");
+  const offthread = await ensureOffthreadServer();
   const page = await browser.newPage();
-  const localAudios = new Map<string, AudioEntry>();
+  const assetMap = new Map<string, RenderAsset>();
   try {
-    const propsQuery = propsB64 ? `&props=${encodeURIComponent(propsB64)}` : "";
-    const target = `${url}/?headless=1&comp=${encodeURIComponent(comp)}${propsQuery}`;
+    const target = buildHeadlessUrl({
+      baseUrl: url,
+      comp,
+      propsB64,
+      proxyPort: offthread.port,
+    });
     await page.goto(target, { waitUntil: "networkidle0" });
 
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
@@ -67,15 +75,15 @@ export const executeCaptureRange = async (
       await page.waitForFunction(() => window.__miniRemotionReady === true, {
         timeout: 15000,
       });
-      const frameAudios = (await page.evaluate(
-        () => window.__miniRemotionGetAudio?.() ?? [],
-      )) as AudioEntry[];
-      for (const a of frameAudios) localAudios.set(a.id, a);
+      const frameAssets = (await page.evaluate(
+        () => window.__miniRemotionCollectAssets?.() ?? [],
+      )) as RenderAsset[];
+      mergeFrameAssets(assetMap, frameAssets);
       await canvas.screenshot({
         path: join(framesDir, `frame-${String(i).padStart(6, "0")}.png`),
       });
     }
-    return { meta, audios: Array.from(localAudios.values()) };
+    return { meta, renderAssets: Array.from(assetMap.values()) };
   } finally {
     await page.close();
   }
@@ -87,8 +95,8 @@ export const runQueueWorker = async (
   workerId: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   puppeteer: any,
-): Promise<{ processed: number; audios: AudioEntry[] }> => {
-  const mergedAudios = new Map<string, AudioEntry>();
+): Promise<{ processed: number; renderAssets: RenderAsset[] }> => {
+  const merged = new Map<string, RenderAsset>();
   let processed = 0;
   const browser = await puppeteer.launch({
     headless: true,
@@ -102,15 +110,15 @@ export const runQueueWorker = async (
       if (!job) break;
 
       try {
-        const { audios } = await executeCaptureRange(browser, {
+        const { renderAssets } = await executeCaptureRange(browser, {
           url: job.url,
           comp: job.comp,
           range: job.range,
           propsB64: job.propsB64,
           framesDir: job.framesDir,
         });
-        for (const a of audios) mergedAudios.set(a.id, a);
-        await completeJob(batchId, job.id, audios);
+        for (const a of renderAssets) merged.set(a.id, a);
+        await completeJob(batchId, job.id, renderAssets);
         processed++;
       } catch (e) {
         await failJob(
@@ -124,13 +132,13 @@ export const runQueueWorker = async (
     await browser.close();
   }
 
-  return { processed, audios: Array.from(mergedAudios.values()) };
+  return { processed, renderAssets: Array.from(merged.values()) };
 };
 
 export type DistributedCaptureResult = {
   meta: Meta;
   framesDir: string;
-  audios: AudioEntry[];
+  renderAssets: RenderAsset[];
   batchId: string;
 };
 
@@ -198,15 +206,15 @@ export const captureFramesDistributed = async (opts: {
     throw new Error(`分布式队列有 ${failed} 个任务失败(done=${done})`);
   }
 
-  const audioMap = new Map<string, AudioEntry>();
+  const assetMap = new Map<string, RenderAsset>();
   for (const w of workerResults) {
-    for (const a of w.audios) audioMap.set(a.id, a);
+    for (const a of w.renderAssets) assetMap.set(a.id, a);
   }
 
   return {
     meta,
     framesDir,
-    audios: Array.from(audioMap.values()),
+    renderAssets: Array.from(assetMap.values()),
     batchId,
   };
 };

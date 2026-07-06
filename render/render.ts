@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ensureRenderSite } from "../engine/render-site.js";
 import { captureFrames, defaultConcurrency, encodeVideo } from "./pipeline.js";
+import { closeOffthreadServer } from "./offthread/index.js";
 
 const parseArgs = () => {
   const argv = process.argv.slice(2);
@@ -39,13 +40,15 @@ const main = async () => {
   const finalOut = await encodeVideo({
     meta: captured.meta,
     framesDir: captured.framesDir,
-    audios: captured.audios,
+    renderAssets: captured.renderAssets,
     out,
   });
+  await closeOffthreadServer();
   console.log(`[mini-remotion] ✅ 导出完成: ${finalOut}`);
 };
 
-main().catch((err) => {
+main().catch(async (err) => {
+  await closeOffthreadServer().catch(() => undefined);
   console.error(err);
   process.exit(1);
 });

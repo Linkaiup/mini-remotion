@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ensureRenderSite } from "../../engine/render-site.js";
+import { ensureOffthreadServer } from "../../render/offthread/index.js";
+import { buildHeadlessUrl } from "../../render/headless-url.js";
 import { sampleFramesForTimeline } from "../validate-plan.js";
 import type { VideoTimeline } from "../timeline/types.js";
 
@@ -41,6 +43,7 @@ export const runPreviewCheck = async (
   await mkdir(framesDir, { recursive: true });
 
   const baseUrl = await ensureRenderSite();
+  const offthread = await ensureOffthreadServer();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let puppeteer: any;
@@ -67,7 +70,11 @@ export const runPreviewCheck = async (
 
   try {
     const page = await browser.newPage();
-    const url = `${baseUrl}/?headless=1&comp=GeneratedVideo&_t=${Date.now()}`;
+    const url = `${buildHeadlessUrl({
+      baseUrl,
+      comp: "GeneratedVideo",
+      proxyPort: offthread.port,
+    })}&_t=${Date.now()}`;
     await page.goto(url, { waitUntil: "networkidle0", timeout: 20000 });
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
       timeout: 15000,

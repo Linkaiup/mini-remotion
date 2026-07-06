@@ -6,8 +6,15 @@ import { mkdir, rm } from "node:fs/promises";
 import { cpus } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ChromiumPool, runPoolTasks } from "./chromium-pool.js";
+import { buildHeadlessUrl } from "./headless-url.js";
+import { ensureOffthreadServer } from "./offthread/index.js";
 import { scheduleFrames } from "./frame-scheduler.js";
 import type { FrameSchedule } from "./frame-scheduler.js";
+import { mergeAudioTracks } from "./audio/merge-tracks.js";
+import { prepareAudioTracks } from "./audio/prepare-tracks.js";
+import type { RenderAsset } from "../src/core/render-asset.js";
+
+export type { RenderAsset };
 
 export type Meta = {
   width: number;
@@ -16,19 +23,13 @@ export type Meta = {
   durationInFrames: number;
 };
 
-export type AudioEntry = {
-  id: string;
-  src: string;
-  startInFrames: number;
-  durationInFrames: number;
-  startFromInSeconds: number;
-  volume: number;
-};
+/** @deprecated 使用 RenderAsset */
+export type AudioEntry = RenderAsset;
 
 export type CaptureResult = {
   meta: Meta;
   framesDir: string;
-  audios: AudioEntry[];
+  renderAssets: RenderAsset[];
   elapsedSeconds: number;
   schedule: FrameSchedule;
 };
@@ -48,8 +49,12 @@ const runFfmpeg = (args: string[]): Promise<void> =>
     );
   });
 
-const resolveAsset = (src: string): string =>
-  resolve("public", src.replace(/^\//, ""));
+export const mergeFrameAssets = (
+  map: Map<string, RenderAsset>,
+  frameAssets: RenderAsset[],
+): void => {
+  for (const a of frameAssets) map.set(a.id, a);
+};
 
 export const splitRanges = (total: number, count: number): [number, number][] => {
   const n = Math.min(count, total);
@@ -72,16 +77,16 @@ const renderJob = async (
     comp: string;
     range: [number, number];
     propsB64: string;
+    proxyPort: number;
   },
   framesDir: string,
-  audioMap: Map<string, AudioEntry>,
+  assetMap: Map<string, RenderAsset>,
   onFrameDone: () => void,
 ): Promise<Meta> => {
-  const { url, comp, range, propsB64 } = args;
+  const { url, comp, range, propsB64, proxyPort } = args;
   const page = await browser.newPage();
   try {
-    const propsQuery = propsB64 ? `&props=${encodeURIComponent(propsB64)}` : "";
-    const target = `${url}/?headless=1&comp=${encodeURIComponent(comp)}${propsQuery}`;
+    const target = buildHeadlessUrl({ baseUrl: url, comp, propsB64, proxyPort });
     await page.goto(target, { waitUntil: "networkidle0" });
 
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
@@ -106,10 +111,10 @@ const renderJob = async (
       await page.waitForFunction(() => window.__miniRemotionReady === true, {
         timeout: 15000,
       });
-      const frameAudios = (await page.evaluate(
-        () => window.__miniRemotionGetAudio?.() ?? [],
-      )) as AudioEntry[];
-      for (const a of frameAudios) audioMap.set(a.id, a);
+      const frameAssets = (await page.evaluate(
+        () => window.__miniRemotionCollectAssets?.() ?? [],
+      )) as RenderAsset[];
+      mergeFrameAssets(assetMap, frameAssets);
       await canvas.screenshot({
         path: join(framesDir, `frame-${String(i).padStart(6, "0")}.png`),
       });
@@ -127,15 +132,20 @@ export const probeMeta = async (opts: {
   url: string;
   propsB64?: string;
 }): Promise<Meta> => {
+  const offthread = await ensureOffthreadServer();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let puppeteer: any;
   puppeteer = await import("puppeteer" as string);
   const browser = await puppeteer.launch({ headless: true, args: LAUNCH_ARGS });
   try {
     const page = await browser.newPage();
-    const propsQuery = opts.propsB64 ? `&props=${encodeURIComponent(opts.propsB64)}` : "";
     await page.goto(
-      `${opts.url}/?headless=1&comp=${encodeURIComponent(opts.comp)}${propsQuery}`,
+      buildHeadlessUrl({
+        baseUrl: opts.url,
+        comp: opts.comp,
+        propsB64: opts.propsB64,
+        proxyPort: offthread.port,
+      }),
       { waitUntil: "networkidle0" },
     );
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
@@ -159,6 +169,7 @@ export const captureFramesWithPool = async (opts: {
 }): Promise<CaptureResult> => {
   const url = opts.url ?? "http://localhost:5173";
   const propsB64 = opts.propsB64 ?? "";
+  const offthread = await ensureOffthreadServer();
 
   if (opts.distributed || process.env.MINI_REMOTION_DISTRIBUTED_QUEUE === "1") {
     const { captureFramesDistributed } = await import("./queue/distributed-capture.js");
@@ -174,7 +185,7 @@ export const captureFramesWithPool = async (opts: {
     return {
       meta: result.meta,
       framesDir: result.framesDir,
-      audios: result.audios,
+      renderAssets: result.renderAssets,
       elapsedSeconds: (Date.now() - started) / 1000,
       schedule: opts.schedule,
     };
@@ -198,7 +209,7 @@ export const captureFramesWithPool = async (opts: {
     `[chromium-pool] ${opts.comp}: ${meta.durationInFrames} 帧 → ${jobs.length} 任务, pool=${poolSize}`,
   );
 
-  const audioMap = new Map<string, AudioEntry>();
+  const assetMap = new Map<string, RenderAsset>();
   let done = 0;
   const total = meta.durationInFrames;
   const onFrameDone = () => {
@@ -218,9 +229,15 @@ export const captureFramesWithPool = async (opts: {
         (job) => (browser) =>
           renderJob(
             browser,
-            { url, comp: opts.comp, range: job.range, propsB64 },
+            {
+              url,
+              comp: opts.comp,
+              range: job.range,
+              propsB64,
+              proxyPort: offthread.port,
+            },
             framesDir,
-            audioMap,
+            assetMap,
             onFrameDone,
           ),
       ),
@@ -230,7 +247,7 @@ export const captureFramesWithPool = async (opts: {
     return {
       meta: metas[0],
       framesDir,
-      audios: Array.from(audioMap.values()),
+      renderAssets: Array.from(assetMap.values()),
       elapsedSeconds: (Date.now() - started) / 1000,
       schedule: opts.schedule,
     };
@@ -262,62 +279,32 @@ export const captureFrames = async (opts: {
 
 const mixAudio = async (
   silentVideo: string,
-  audios: AudioEntry[],
+  assets: RenderAsset[],
   fps: number,
   out: string,
 ): Promise<void> => {
-  const inputs: string[] = ["-i", silentVideo];
-  const chains: string[] = [];
-  const labels: string[] = [];
-
-  audios.forEach((a, k) => {
-    const inputIndex = k + 1;
-    inputs.push("-i", resolveAsset(a.src));
-    const startSec = a.startFromInSeconds;
-    const endSec = a.startFromInSeconds + a.durationInFrames / fps;
-    const delayMs = Math.round((a.startInFrames / fps) * 1000);
-    const label = `a${k}`;
-    chains.push(
-      `[${inputIndex}:a]atrim=start=${startSec}:end=${endSec},` +
-        `asetpts=PTS-STARTPTS,adelay=${delayMs}|${delayMs},` +
-        `volume=${a.volume}[${label}]`,
-    );
-    labels.push(`[${label}]`);
-  });
-
-  const filterComplex =
-    audios.length === 1
-      ? `${chains[0]};[a0]anull[aout]`
-      : `${chains.join(";")};${labels.join("")}amix=inputs=${audios.length}:normalize=0[aout]`;
-
-  await runFfmpeg([
-    "-y",
-    ...inputs,
-    "-filter_complex",
-    filterComplex,
-    "-map",
-    "0:v",
-    "-map",
-    "[aout]",
-    "-c:v",
-    "copy",
-    "-c:a",
-    "aac",
-    "-shortest",
-    resolve(out),
-  ]);
+  const tracks = await prepareAudioTracks(assets, fps);
+  if (tracks.length === 0) return;
+  const curved = assets.filter((a) => Array.isArray(a.volume)).length;
+  console.log(
+    `[ffmpeg] 混流 ${tracks.length} 条音轨 (audio=${tracks.filter((t) => t.sourceType === "audio").length}, video=${tracks.filter((t) => t.sourceType === "video").length}, 音量曲线=${curved})…`,
+  );
+  await mergeAudioTracks({ silentVideo, tracks, fps, out });
 };
 
 /** FFmpeg: 编码帧序列 + 可选音频混流 */
 export const encodeVideo = async (opts: {
   meta: Meta;
   framesDir: string;
-  audios: AudioEntry[];
+  renderAssets: RenderAsset[];
+  /** @deprecated 使用 renderAssets */
+  audios?: RenderAsset[];
   out: string;
 }): Promise<string> => {
+  const assets = opts.renderAssets ?? opts.audios ?? [];
   await mkdir(dirname(resolve(opts.out)), { recursive: true });
   const finalOut = resolve(opts.out);
-  const hasAudio = opts.audios.length > 0;
+  const hasAudio = assets.length > 0;
   const silentOut = hasAudio ? resolve("out/_silent.mp4") : finalOut;
 
   console.log("[ffmpeg] 编码画面…");
@@ -335,8 +322,7 @@ export const encodeVideo = async (opts: {
   ]);
 
   if (hasAudio) {
-    console.log(`[ffmpeg] 混流 ${opts.audios.length} 条音频…`);
-    await mixAudio(silentOut, opts.audios, opts.meta.fps, opts.out);
+    await mixAudio(silentOut, assets, opts.meta.fps, opts.out);
     await rm(silentOut, { force: true });
   }
 
