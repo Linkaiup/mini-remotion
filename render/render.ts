@@ -3,7 +3,7 @@
  */
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { ensureDevServer } from "../engine/dev-server.js";
+import { ensureRenderSite } from "../engine/render-site.js";
 import { captureFrames, defaultConcurrency, encodeVideo } from "./pipeline.js";
 
 const parseArgs = () => {
@@ -29,8 +29,8 @@ const parseArgs = () => {
 };
 
 const main = async () => {
-  const { comp, out, url, concurrency, propsB64 } = parseArgs();
-  await ensureDevServer();
+  const { comp, out, concurrency, propsB64 } = parseArgs();
+  const url = await ensureRenderSite();
   await mkdir(resolve("out"), { recursive: true });
 
   const captured = await captureFrames({ comp, url, concurrency, propsB64 });

@@ -154,9 +154,32 @@ export const captureFramesWithPool = async (opts: {
   schedule: FrameSchedule;
   propsB64?: string;
   framesDir?: string;
+  /** 使用文件队列分布式截图(适合多 worker / 多机) */
+  distributed?: boolean;
 }): Promise<CaptureResult> => {
   const url = opts.url ?? "http://localhost:5173";
   const propsB64 = opts.propsB64 ?? "";
+
+  if (opts.distributed || process.env.MINI_REMOTION_DISTRIBUTED_QUEUE === "1") {
+    const { captureFramesDistributed } = await import("./queue/distributed-capture.js");
+    const started = Date.now();
+    const result = await captureFramesDistributed({
+      comp: opts.comp,
+      url,
+      schedule: opts.schedule,
+      propsB64,
+      framesDir: opts.framesDir,
+      poolSize: opts.schedule.poolSize,
+    });
+    return {
+      meta: result.meta,
+      framesDir: result.framesDir,
+      audios: result.audios,
+      elapsedSeconds: (Date.now() - started) / 1000,
+      schedule: opts.schedule,
+    };
+  }
+
   const framesDir = resolve(opts.framesDir ?? "out/frames");
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

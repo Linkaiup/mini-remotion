@@ -5,3 +5,6 @@ out
 .DS_Store
 .puppeteer-cache
 .env
+public/generated
+out/cache
+out/qa

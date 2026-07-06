@@ -10,6 +10,12 @@ export {
   useAudioManager,
 } from "./audio-manager";
 export type { AudioEntry } from "./audio-manager";
+export { Video } from "./Video";
+export {
+  VideoManagerProvider,
+  useVideoManager,
+} from "./video-manager";
+export type { VideoEntry } from "./video-manager";
 export { PlaybackProvider, usePlayback } from "./playback";
 export { VideoConfigProvider, useVideoConfig } from "./video-config";
 export type { VideoConfig } from "./video-config";

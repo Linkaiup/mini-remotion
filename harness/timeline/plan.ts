@@ -5,6 +5,11 @@ import {
   buildTimelineUserMessage,
 } from "./prompts.js";
 import type { VideoTimeline } from "./types.js";
+import {
+  applyTemplate,
+  getTemplateById,
+  matchTemplate,
+} from "./templates.js";
 
 const extractJson = (text: string): string => {
   const m = text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
@@ -76,9 +81,26 @@ export const planTimelineStub = (
 
 export const planTimeline = async (
   prompt: string,
-  opts?: { durationInFrames?: number; useStub?: boolean },
+  opts?: {
+    durationInFrames?: number;
+    useStub?: boolean;
+    templateId?: string;
+  },
 ): Promise<VideoTimeline> => {
   const fallbackFrames = opts?.durationInFrames ?? 120;
+
+  const template =
+    (opts?.templateId ? getTemplateById(opts.templateId) : null) ??
+    matchTemplate(prompt);
+
+  if (template) {
+    const tl = applyTemplate(template, prompt, opts?.durationInFrames ?? template.durationInFrames);
+    harnessLog(
+      "TIMELINE_PLAN",
+      `模板 [${template.id}] → ${tl.scenes.length} 场景, ${tl.durationInFrames} 帧`,
+    );
+    return tl;
+  }
 
   if (opts?.useStub || process.env.MINI_REMOTION_PROVIDER === "stub") {
     const tl = planTimelineStub(prompt, fallbackFrames);

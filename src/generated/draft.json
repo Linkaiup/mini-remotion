@@ -1,0 +1,49 @@
+{
+  "id": "agent-generated",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "durationInFrames": 120,
+  "background": "#0f172a",
+  "items": [
+    {
+      "id": "item-scene-0",
+      "type": "text",
+      "from": 0,
+      "durationInFrames": 40,
+      "x": 80,
+      "y": 320,
+      "text": "开场",
+      "fontSize": 64,
+      "color": "#f8fafc",
+      "fontWeight": 700,
+      "animation": "springPop"
+    },
+    {
+      "id": "item-scene-1",
+      "type": "text",
+      "from": 40,
+      "durationInFrames": 40,
+      "x": 80,
+      "y": 320,
+      "text": "P3验证",
+      "fontSize": 48,
+      "color": "#f8fafc",
+      "fontWeight": 700,
+      "animation": "fadeIn"
+    },
+    {
+      "id": "item-scene-2",
+      "type": "text",
+      "from": 80,
+      "durationInFrames": 40,
+      "x": 80,
+      "y": 320,
+      "text": "结尾",
+      "fontSize": 48,
+      "color": "#f8fafc",
+      "fontWeight": 700,
+      "animation": "fadeIn"
+    }
+  ]
+}

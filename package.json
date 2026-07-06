@@ -9,6 +9,8 @@
     "build": "tsc && vite build",
     "serve": "vite preview --port 4173",
     "make-audio": "tsx scripts/make-sample-audio.ts",
+    "make-video": "tsx scripts/make-sample-video.ts",
+    "queue:worker": "tsx render/queue/worker-cli.ts",
     "render": "tsx render/render.ts",
     "engine:write": "tsx engine/write-generated.ts",
     "engine:validate": "tsx engine/validate.ts",

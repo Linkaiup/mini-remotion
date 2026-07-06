@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { ensureDevServer } from "./dev-server.js";
+import { ensureRenderSite } from "./render-site.js";
 import {
   captureFrames,
   captureFramesWithPool,
@@ -8,7 +8,9 @@ import {
   scheduleFrames,
 } from "../render/pipeline.js";
 
-export { ensureDevServer };
+export { ensureDevServer } from "./dev-server.js";
+export { ensureRenderSite, getRenderSiteMode, getRenderSiteUrl } from "./render-site.js";
+export { ensureBundle, buildBundle } from "./bundle.js";
 export {
   captureFrames,
   captureFramesWithPool,
@@ -23,10 +25,10 @@ export const renderComposition = async (opts: {
   concurrency?: number;
   url?: string;
 }): Promise<string> => {
-  await ensureDevServer();
+  const url = opts.url ?? (await ensureRenderSite());
   const captured = await captureFrames({
     comp: opts.comp,
-    url: opts.url,
+    url,
     concurrency: opts.concurrency,
   });
   return encodeVideo({

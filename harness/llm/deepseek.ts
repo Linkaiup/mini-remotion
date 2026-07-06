@@ -6,5 +6,11 @@ export const createDeepSeekProvider = (): LLMProvider => {
   if (!apiKey) throw new Error("缺少 DEEPSEEK_API_KEY");
   const model = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro";
   const baseURL = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-  return createChatProvider({ label: "deepseek", apiKey, model, baseURL });
+  return createChatProvider({
+    label: "deepseek",
+    apiKey,
+    model,
+    baseURL,
+    costLabel: "timeline|compose",
+  });
 };

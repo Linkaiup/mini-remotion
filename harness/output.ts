@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { harnessLog } from "./log.js";
 import type { HarnessContext, HarnessResult } from "./types.js";
 
-/** OUTPUT: 汇总产物并可选写入 manifest */
 export const finalizeOutput = async (
   ctx: HarnessContext,
   result: Omit<HarnessResult, "status">,
@@ -20,15 +19,40 @@ export const finalizeOutput = async (
   if (result.quality) {
     harnessLog("OUTPUT", `   quality: ${result.quality.score.toFixed(2)}`);
   }
+  if (result.assets?.length) {
+    harnessLog("OUTPUT", `   assets:  ${result.assets.length} 张`);
+  }
+
+  if (result.cost) {
+    harnessLog(
+      "OUTPUT",
+      `   cost:    $${result.cost.totalUsd.toFixed(4)} (${result.cost.totalLlmTokens} tokens)`,
+    );
+  }
+
+  if (result.preview) {
+    harnessLog(
+      "OUTPUT",
+      `   preview: ${result.preview.score.toFixed(2)} (${result.preview.ok ? "ok" : "issues"})`,
+    );
+  }
+  if (result.draftPath) {
+    harnessLog("OUTPUT", `   draft:   ${result.draftPath}`);
+  }
 
   const manifest = {
     prompt: ctx.prompt,
+    promptHash: ctx.promptHash,
     provider: result.provider,
     attempts: result.attempts,
     timeline: result.timeline,
+    assets: result.assets,
     videoPath: result.videoPath,
     codePath: result.codePath,
+    draftPath: result.draftPath,
     quality: result.quality,
+    preview: result.preview,
+    cost: result.cost,
     frameSchedule: ctx.frameSchedule
       ? {
           jobs: ctx.frameSchedule.jobs.length,

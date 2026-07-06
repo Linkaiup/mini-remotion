@@ -4,10 +4,12 @@ import {
   FrameProvider,
   PlaybackProvider,
   VideoConfigProvider,
+  VideoManagerProvider,
   getPendingCount,
   useAudioManager,
+  useVideoManager,
 } from "../core";
-import type { AudioEntry } from "../core";
+import type { AudioEntry, VideoEntry } from "../core";
 import { getComposition } from "../compositions";
 
 /**
@@ -27,8 +29,22 @@ declare global {
       durationInFrames: number;
     };
     __miniRemotionGetAudio?: () => AudioEntry[];
+    /** 当前帧 composition 登记的视频轨(调试用,导出主要靠 DOM seek + 截图) */
+    __miniRemotionGetVideo?: () => VideoEntry[];
   }
 }
+
+// 把 VideoManager 的读取函数挂到 window
+const VideoBridge: React.FC = () => {
+  const manager = useVideoManager();
+  useEffect(() => {
+    window.__miniRemotionGetVideo = () => manager?.getEntries() ?? [];
+    return () => {
+      delete window.__miniRemotionGetVideo;
+    };
+  }, [manager]);
+  return null;
+};
 
 // 把 AudioManager 的读取函数挂到 window,供渲染器每帧抓取
 const AudioBridge: React.FC = () => {
@@ -90,7 +106,9 @@ export const Headless: React.FC<{
     >
       <PlaybackProvider playing={false}>
         <AudioManagerProvider>
-          <AudioBridge />
+          <VideoManagerProvider>
+            <AudioBridge />
+            <VideoBridge />
           {/* 原始分辨率、无缩放、定位左上角,方便 Puppeteer 精确截图 */}
           <div
             id="mini-remotion-canvas"
@@ -107,6 +125,7 @@ export const Headless: React.FC<{
               <Component {...mergedProps} />
             </FrameProvider>
           </div>
+          </VideoManagerProvider>
         </AudioManagerProvider>
       </PlaybackProvider>
     </VideoConfigProvider>

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { ensureDevServer } from "./dev-server.js";
+import { ensureRenderSite } from "./render-site.js";
 
-const DEV_URL = process.env.MINI_REMOTION_DEV_URL ?? "http://localhost:5173";
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const runTsc = async (): Promise<string | null> =>
@@ -23,8 +22,10 @@ export const runTsc = async (): Promise<string | null> =>
     child.on("error", () => res("无法运行 tsc"));
   });
 
-export const smokeTest = async (): Promise<string | null> => {
-  await ensureDevServer();
+export const smokeTestAtFrames = async (
+  frames: number[],
+): Promise<string | null> => {
+  const baseUrl = await ensureRenderSite();
   await wait(1200);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,23 +59,26 @@ export const smokeTest = async (): Promise<string | null> => {
   });
 
   try {
-    const url = `${DEV_URL}/?headless=1&comp=GeneratedVideo&_t=${Date.now()}`;
+    const url = `${baseUrl}/?headless=1&comp=GeneratedVideo&_t=${Date.now()}`;
     await page.goto(url, { waitUntil: "networkidle0", timeout: 20000 });
     await page.waitForFunction(() => Boolean(window.__miniRemotionMeta), {
       timeout: 15000,
     });
-    await page.evaluate(() => window.__miniRemotionSetFrame?.(0));
-    await page.evaluate(
-      () =>
-        new Promise<void>((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => r())),
-        ),
-    );
-    await page.waitForFunction(() => window.__miniRemotionReady === true, {
-      timeout: 10000,
-    });
-    if (!(await page.$("#mini-remotion-canvas"))) {
-      errors.push("找不到 #mini-remotion-canvas");
+
+    for (const frame of frames) {
+      await page.evaluate((f: number) => window.__miniRemotionSetFrame?.(f), frame);
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => r())),
+          ),
+      );
+      await page.waitForFunction(() => window.__miniRemotionReady === true, {
+        timeout: 10000,
+      });
+      if (!(await page.$("#mini-remotion-canvas"))) {
+        errors.push(`帧 ${frame}: 找不到 #mini-remotion-canvas`);
+      }
     }
   } catch (e) {
     errors.push(e instanceof Error ? e.message : String(e));
@@ -84,6 +88,9 @@ export const smokeTest = async (): Promise<string | null> => {
 
   return errors.length > 0 ? errors.join("\n") : null;
 };
+
+export const smokeTest = async (): Promise<string | null> =>
+  smokeTestAtFrames([0]);
 
 export const runValidate = async (): Promise<{
   ok: boolean;

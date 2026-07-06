@@ -7,6 +7,16 @@ export type TimelineScene = {
   description: string;
 };
 
+/** 已生成的图像素材(Seedream 等) */
+export type TimelineAsset = {
+  id: string;
+  sceneId: string;
+  prompt: string;
+  /** public/ 相对路径 */
+  path: string;
+  sourceUrl?: string;
+};
+
 /** Timeline Planning 产出 — 驱动 React Composition 与 Frame Scheduler */
 export type VideoTimeline = {
   width: number;
@@ -15,4 +25,5 @@ export type VideoTimeline = {
   durationInFrames: number;
   summary: string;
   scenes: TimelineScene[];
+  assets?: TimelineAsset[];
 };

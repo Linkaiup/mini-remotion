@@ -26,6 +26,8 @@ const parseArgs = () => {
     "concurrency",
     "max-retries",
     "min-quality",
+    "max-budget",
+    "template",
   ]);
   const skip = new Set<number>();
   for (let i = 0; i < argv.length; i++) {
@@ -46,14 +48,24 @@ const parseArgs = () => {
   --out <path>           输出 mp4 (默认 out/agent-video.mp4)
   --narration <text>     旁白(macOS say)
   --no-tts               跳过 TTS
+  --no-images            跳过 Seedream 图像生成
   --no-render            只生成+校验
   --concurrency <n>      并发段数
   --max-retries <n>      最大重试 (默认 3)
   --min-quality <0-1>    最低质量分 (默认 0.5)
+  --max-budget <usd>     LLM+图像 估算预算上限(美元)
+  --no-cache             禁用 timeline/代码缓存
+  --no-preview           跳过低清预览,直接全量渲染
+  --template <id>        时间线模板: intro-main-outro | title-slide | countdown
+  --distributed          使用文件队列分布式帧截图
+  --vision-qa            启用 Vision LLM 语义质检(需 API key)
 
 环境变量:
   在项目根目录创建 .env (参考 .env.example), 或 export 到 shell
   DEEPSEEK_API_KEY, DEEPSEEK_MODEL, MINI_REMOTION_PROVIDER=stub|deepseek|openai
+  MINI_REMOTION_RENDER_MODE=bundle  # CI 用 vite build + preview
+  MINI_REMOTION_DISTRIBUTED_QUEUE=1
+  MINI_REMOTION_VISION_QA=1
 `);
     process.exit(1);
   }
@@ -63,17 +75,32 @@ const parseArgs = () => {
     out: getValue("out", "out/agent-video.mp4"),
     narration: getValue("narration"),
     noTts: getFlag("no-tts"),
+    noImages: getFlag("no-images"),
     skipRender: getFlag("no-render"),
     concurrency: getValue("concurrency")
       ? Number(getValue("concurrency"))
       : undefined,
     maxRetries: Number(getValue("max-retries", "3")),
     minQualityScore: Number(getValue("min-quality", "0.5")),
+    maxBudgetUsd: getValue("max-budget")
+      ? Number(getValue("max-budget"))
+      : process.env.MAX_BUDGET_USD
+        ? Number(process.env.MAX_BUDGET_USD)
+        : undefined,
+    useCache: !getFlag("no-cache"),
+    skipPreview: getFlag("no-preview"),
+    templateId: getValue("template"),
   };
 };
 
 const main = async () => {
   const args = parseArgs();
+  if (process.argv.includes("--distributed")) {
+    process.env.MINI_REMOTION_DISTRIBUTED_QUEUE = "1";
+  }
+  if (process.argv.includes("--vision-qa")) {
+    process.env.MINI_REMOTION_VISION_QA = "1";
+  }
   const result = await runHarness({
     prompt: args.prompt,
     narration: args.narration,
@@ -82,7 +109,12 @@ const main = async () => {
     concurrency: args.concurrency,
     skipRender: args.skipRender,
     noTts: args.noTts,
+    noImages: args.noImages,
     minQualityScore: args.minQualityScore,
+    maxBudgetUsd: args.maxBudgetUsd,
+    useCache: args.useCache,
+    skipPreview: args.skipPreview,
+    templateId: args.templateId,
   });
 
   console.log("\n[harness] 完成 (DONE)");
@@ -94,6 +126,8 @@ const main = async () => {
     console.log(`  quality:  ${result.quality.score.toFixed(2)}`);
   if (result.timeline)
     console.log(`  timeline: ${result.timeline.scenes.length} 场景`);
+  if (result.assets?.length)
+    console.log(`  assets:   ${result.assets.length} 张`);
   if (result.manifestPath) console.log(`  manifest: ${result.manifestPath}`);
   if (result.tts)
     console.log(
