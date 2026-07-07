@@ -92,7 +92,22 @@ export const Studio: React.FC = () => {
       >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
           🎬 Mini Remotion
+          <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>
+            经典 Studio
+          </div>
         </div>
+        <a
+          href="/"
+          style={{
+            display: "block",
+            fontSize: 12,
+            color: "#7dd3fc",
+            marginBottom: 12,
+            textDecoration: "none",
+          }}
+        >
+          → 打开可视化编辑器
+        </a>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
           COMPOSITIONS
         </div>

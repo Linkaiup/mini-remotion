@@ -2,6 +2,7 @@ import React, { useEffect, useId, useMemo, useRef } from "react";
 import { continueRender, delayRender } from "./delay-render";
 import { useCurrentFrame, useSequenceOffset } from "./frame-context";
 import { usePlayback } from "./playback";
+import { usePreviewTransportRegister } from "./preview-transport";
 import { useRenderAssetManager } from "./render-asset-manager";
 import { sampleVolumeProp, isSilentVolume } from "./sample-volume-prop";
 import { useVideoConfig } from "./video-config";
@@ -10,8 +11,7 @@ import { evaluateVolume } from "./volume-prop";
 
 /**
  * <Video>:Html5 路线 — 导出时浏览器内 seek + 截图。
- * 若需抽帧代理请用 <OffthreadVideo>。
- * 未 muted 时导出会登记 type:'video' 音轨(P4-c)。
+ * 预览：音轨作主时钟（PreviewTransport），<video> 静音并按帧 seek 跟画。
  */
 export const Video: React.FC<{
   src: string;
@@ -32,9 +32,11 @@ export const Video: React.FC<{
   const { playing } = usePlayback();
   const offset = useSequenceOffset();
   const assets = useRenderAssetManager();
+  const registerTransport = usePreviewTransportRegister();
   const id = useId();
   const frame = useCurrentFrame();
-  const ref = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const dur = durationInFrames ?? config.durationInFrames - offset;
   const assetVolume = useMemo(
@@ -44,8 +46,56 @@ export const Video: React.FC<{
   );
   const previewVolume = evaluateVolume({ frame, volume });
   const isMuted = muted ?? config.mode === "render";
+  const previewSplitAudio = config.mode === "preview" && !isMuted;
 
-  // 视频内音轨:导出且未静音时登记(P4-c)
+  const localFrame = Math.max(0, Math.min(frame, dur - 1));
+  const targetSec = (startFrom + localFrame) / config.fps;
+
+  const seekToGlobalFrame = useMemo(
+    () => (globalFrame: number) => {
+      const el = audioRef.current;
+      if (!el) return;
+      const local = globalFrame - offset;
+      if (local < 0 || local >= dur) {
+        el.pause();
+        return;
+      }
+      el.currentTime = startFrom / config.fps + local / config.fps;
+    },
+    [offset, dur, startFrom, config.fps],
+  );
+
+  useEffect(() => {
+    if (!previewSplitAudio || !registerTransport) return;
+    return registerTransport({
+      id: `${id}-preview-audio`,
+      priority: 0,
+      getGlobalFrame: () => {
+        const el = audioRef.current;
+        if (!el || el.readyState < 1) return null;
+        return (
+          offset +
+          Math.round((el.currentTime - startFrom / config.fps) * config.fps)
+        );
+      },
+      play: () => {
+        audioRef.current?.play().catch(() => undefined);
+      },
+      pause: () => {
+        audioRef.current?.pause();
+      },
+      seekToGlobalFrame,
+    });
+  }, [
+    previewSplitAudio,
+    registerTransport,
+    id,
+    offset,
+    startFrom,
+    config.fps,
+    seekToGlobalFrame,
+  ]);
+
   useEffect(() => {
     if (config.mode !== "render" || !assets) return;
     if (window.__miniRemotionAudioEnabled === false) return;
@@ -75,7 +125,7 @@ export const Video: React.FC<{
   ]);
 
   useEffect(() => {
-    const el = ref.current;
+    const el = videoRef.current;
     if (!el) return;
 
     const handle = delayRender();
@@ -99,17 +149,19 @@ export const Video: React.FC<{
   }, [src]);
 
   useEffect(() => {
-    if (config.mode !== "preview") return;
-    const el = ref.current;
+    if (!previewSplitAudio) return;
+    const el = audioRef.current;
     if (el) el.volume = Math.min(1, previewVolume);
-  }, [previewVolume, config.mode]);
+  }, [previewVolume, previewSplitAudio]);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    if (!previewSplitAudio || playing) return;
+    seekToGlobalFrame(offset + frame);
+  }, [previewSplitAudio, playing, frame, offset, seekToGlobalFrame]);
 
-    const localFrame = Math.max(0, Math.min(frame, dur - 1));
-    const targetSec = (startFrom + localFrame) / config.fps;
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
 
     const handle = config.mode === "render" ? delayRender() : null;
     let done = false;
@@ -122,6 +174,10 @@ export const Video: React.FC<{
     const onSeeked = () => finish();
     if (handle) el.addEventListener("seeked", onSeeked, { once: true });
 
+    if (config.mode === "preview") {
+      el.pause();
+    }
+
     if (Math.abs(el.currentTime - targetSec) > 0.04) {
       el.currentTime = targetSec;
     } else if (handle) {
@@ -132,24 +188,21 @@ export const Video: React.FC<{
       el.removeEventListener("seeked", onSeeked);
       finish();
     };
-  }, [frame, startFrom, dur, config.fps, config.mode]);
-
-  useEffect(() => {
-    if (config.mode !== "preview") return;
-    const el = ref.current;
-    if (!el) return;
-    if (playing) el.play().catch(() => undefined);
-    else el.pause();
-  }, [playing, config.mode]);
+  }, [frame, targetSec, config.mode]);
 
   return (
-    <video
-      ref={ref}
-      src={src}
-      muted={isMuted}
-      playsInline
-      preload="auto"
-      style={{ position: "absolute", objectFit: "cover", ...style }}
-    />
+    <>
+      <video
+        ref={videoRef}
+        src={src}
+        muted={config.mode === "preview" || isMuted}
+        playsInline
+        preload="auto"
+        style={{ position: "absolute", objectFit: "cover", ...style }}
+      />
+      {previewSplitAudio ? (
+        <audio ref={audioRef} src={src} preload="auto" style={{ display: "none" }} />
+      ) : null}
+    </>
   );
 };

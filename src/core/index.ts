@@ -25,6 +25,13 @@ export { Video } from "./Video";
 export { OffthreadVideo } from "./OffthreadVideo";
 export { getOffthreadVideoSource } from "./offthread-video-source";
 export { PlaybackProvider, usePlayback } from "./playback";
+export {
+  PreviewTransportLoop,
+  PreviewTransportProvider,
+  usePreviewTransport,
+  usePreviewTransportRegister,
+} from "./preview-transport";
+export type { PreviewClockSource } from "./preview-transport";
 export { VideoConfigProvider, useVideoConfig } from "./video-config";
 export type { VideoConfig } from "./video-config";
 export { Easing, interpolate } from "./interpolate";

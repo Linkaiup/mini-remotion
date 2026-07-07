@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef } from "react";
 import { useCurrentFrame, useSequenceOffset } from "./frame-context";
 import { usePlayback } from "./playback";
+import { usePreviewTransportRegister } from "./preview-transport";
 import { useRenderAssetManager } from "./render-asset-manager";
 import { sampleVolumeProp } from "./sample-volume-prop";
 import { useVideoConfig } from "./video-config";
@@ -8,9 +9,7 @@ import type { VolumeProp } from "./volume-prop";
 import { evaluateVolume } from "./volume-prop";
 
 /**
- * <Audio>:声音不靠截图。
- *  - 预览:隐藏 <audio> 跟随帧/播放态,支持 volume(frame) 曲线(P4-d)
- *  - 导出:登记 type:'audio' 资产 → preprocess + FFmpeg 混流
+ * <Audio>:预览时登记为 PreviewTransport 时钟源；暂停/拖拽时 seek 对齐。
  */
 export const Audio: React.FC<{
   src: string;
@@ -22,11 +21,11 @@ export const Audio: React.FC<{
   const { playing } = usePlayback();
   const offset = useSequenceOffset();
   const assets = useRenderAssetManager();
+  const registerTransport = usePreviewTransportRegister();
   const id = useId();
   const frame = useCurrentFrame();
 
   const dur = durationInFrames ?? config.durationInFrames - offset;
-  // 导出会话 mount 时采样整条音量曲线(P4-d)
   const assetVolume = useMemo(
     () => sampleVolumeProp(volume, dur),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- volume 函数在 headless 会话中视为稳定
@@ -53,6 +52,46 @@ export const Audio: React.FC<{
   const ref = useRef<HTMLAudioElement>(null);
   const previewVolume = evaluateVolume({ frame, volume });
 
+  const seekToGlobalFrame = useMemo(
+    () => (globalFrame: number) => {
+      const el = ref.current;
+      if (!el) return;
+      const local = globalFrame - offset;
+      if (local < 0 || local >= dur) {
+        el.pause();
+        return;
+      }
+      const target = startFrom / config.fps + local / config.fps;
+      if (Math.abs(el.currentTime - target) > 0.04) {
+        el.currentTime = target;
+      }
+    },
+    [offset, dur, startFrom, config.fps],
+  );
+
+  useEffect(() => {
+    if (config.mode !== "preview" || !registerTransport) return;
+    return registerTransport({
+      id,
+      priority: 1,
+      getGlobalFrame: () => {
+        const el = ref.current;
+        if (!el || el.readyState < 1) return null;
+        return (
+          offset +
+          Math.round((el.currentTime - startFrom / config.fps) * config.fps)
+        );
+      },
+      play: () => {
+        ref.current?.play().catch(() => undefined);
+      },
+      pause: () => {
+        ref.current?.pause();
+      },
+      seekToGlobalFrame,
+    });
+  }, [config.mode, registerTransport, id, offset, startFrom, config.fps, seekToGlobalFrame]);
+
   useEffect(() => {
     if (config.mode !== "preview") return;
     const el = ref.current;
@@ -60,28 +99,12 @@ export const Audio: React.FC<{
   }, [previewVolume, config.mode]);
 
   useEffect(() => {
-    if (config.mode !== "preview") return;
-    const el = ref.current;
-    if (!el) return;
-    const target = startFrom / config.fps + frame / config.fps;
-    if (Math.abs(el.currentTime - target) > 0.15) {
-      el.currentTime = target;
-    }
-  }, [frame, startFrom, config.fps, config.mode]);
-
-  useEffect(() => {
-    if (config.mode !== "preview") return;
-    const el = ref.current;
-    if (!el) return;
-    if (playing) {
-      el.play().catch(() => undefined);
-    } else {
-      el.pause();
-    }
-  }, [playing, config.mode]);
+    if (config.mode !== "preview" || playing) return;
+    seekToGlobalFrame(offset + frame);
+  }, [config.mode, playing, frame, offset, seekToGlobalFrame]);
 
   if (config.mode !== "preview") {
     return null;
   }
-  return <audio ref={ref} src={src} style={{ display: "none" }} />;
+  return <audio ref={ref} src={src} preload="auto" style={{ display: "none" }} />;
 };
